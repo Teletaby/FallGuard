@@ -49,7 +49,7 @@ class FallDetectionApp:
         self.model = self.load_model()
         
         # Set up detection parameters
-        self.detection_threshold = 0.7  # Increased from 0.5
+        self.detection_threshold = 0.8  # Increased from 0.5
         self.min_consecutive_detections = 3  # Require multiple consecutive detections
         self.fall_counter = 0
         self.confidence_history = []
