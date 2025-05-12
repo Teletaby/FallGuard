@@ -1,0 +1,5 @@
+input_size=55
+hidden_size=128
+output_size=1
+num_layers=2
+sequence_length=10
