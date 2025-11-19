@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 # Import the LSTM model definition
-from models.skeleton_lstm import LSTMModel, evaluate_model
+from app.skeleton_lstm import LSTMModel, evaluate_model
 
 class URFallDataset:
     def __init__(self, normal_csv_path, fall_csv_path, sequence_length=10):
