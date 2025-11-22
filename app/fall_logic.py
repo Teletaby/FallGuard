@@ -174,10 +174,7 @@ class PoseStreamProcessor:
 # 3. FLASK APPLICATION INITIALIZATION & ENDPOINTS
 # ----------------------------------------------------
 
-# Define the absolute path to the 'templates' folder
-# __file__ is app/fall_logic.py
-# os.path.dirname(__file__) is the 'app' directory
-# os.path.join(..., '..', 'templates') goes up one level and into 'templates'
+# Define the absolute path to the 'templates' folder (Fix for TemplateNotFound)
 template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'templates'))
 
 # --- CRITICAL FIX: Explicitly set template_folder ---
@@ -194,8 +191,17 @@ camera_timers = {}
 
 @app.route('/')
 def health_check():
-    # --- FIXED: Renders the index.html file from the correct path ---
+    # Renders the index.html file from the correct path
     return render_template('index.html')
+
+
+@app.route('/api/cameras', methods=['GET'])
+def get_cameras():
+    # --- NEW ROUTE ADDED (Fix for 404 Not Found) ---
+    # This route provides the camera list the frontend expects to start the stream.
+    return jsonify([
+        {"id": "default_camera", "name": "Main Webcam Stream"}
+    ]), 200
 
 
 @app.route('/detect', methods=['POST'])
