@@ -5,8 +5,8 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from collections import deque
-# --- UPDATED IMPORTS HERE ---
 from flask import Flask, request, jsonify, render_template 
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -15,9 +15,7 @@ logger = logging.getLogger(__name__)
 # Initialize MediaPipe Pose components globally
 mp_pose = mp.solutions.pose
 
-# ----------------------------------------------------
-# 1. UTILITY CLASS DEFINITIONS (FallTimer)
-# ----------------------------------------------------
+# UTILITY CLASS DEFINITIONS (FallTimer)
 
 class FallTimer:
     def __init__(self, threshold=10):
@@ -175,7 +173,15 @@ class PoseStreamProcessor:
 # ----------------------------------------------------
 # 3. FLASK APPLICATION INITIALIZATION & ENDPOINTS
 # ----------------------------------------------------
-app = Flask(__name__) 
+
+# Define the absolute path to the 'templates' folder
+# __file__ is app/fall_logic.py
+# os.path.dirname(__file__) is the 'app' directory
+# os.path.join(..., '..', 'templates') goes up one level and into 'templates'
+template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'templates'))
+
+# --- CRITICAL FIX: Explicitly set template_folder ---
+app = Flask(__name__, template_folder=template_dir) 
 
 # Initialize processor globally
 try:
@@ -188,7 +194,7 @@ camera_timers = {}
 
 @app.route('/')
 def health_check():
-    # --- FIXED: Renders the index.html file from the 'templates' folder ---
+    # --- FIXED: Renders the index.html file from the correct path ---
     return render_template('index.html')
 
 
