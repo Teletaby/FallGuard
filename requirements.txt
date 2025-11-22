@@ -4,7 +4,7 @@ opencv-python
 pandas
 scikit-learn
 joblib
-mediapipe==0.10.9
+mediapipe
 requests
 python-pushbullet
 gunicorn
