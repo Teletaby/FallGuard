@@ -8,3 +8,4 @@ mediapipe==0.10.9
 requests
 python-pushbullet
 gunicorn
+flask
