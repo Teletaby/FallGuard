@@ -5,7 +5,8 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from collections import deque
-from flask import Flask, request, jsonify 
+# --- UPDATED IMPORTS HERE ---
+from flask import Flask, request, jsonify, render_template 
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -39,7 +40,6 @@ class FallTimer:
 
 # ----------------------------------------------------
 # 2. CORE LOGIC CLASS DEFINITION (PoseStreamProcessor)
-#    (Pasted directly into this file to avoid import errors)
 # ----------------------------------------------------
 
 class PoseStreamProcessor:
@@ -59,9 +59,7 @@ class PoseStreamProcessor:
         logger.info("MediaPipe Pose initialized within fall_logic.py.")
 
     def _smooth_landmarks(self, camera_index: int, landmarks: list[dict]) -> list[dict]:
-        # Full smoothing logic goes here (use the method from your pose_estimator.py content)
-        # This is the implementation you provided:
-        # ----------------------------------------------------------------------------------
+        # Full smoothing logic goes here
         if camera_index not in self.landmark_history:
             self.landmark_history[camera_index] = deque(maxlen=self.history_size)
         
@@ -95,12 +93,9 @@ class PoseStreamProcessor:
             })
         
         return smoothed_landmarks
-        # ----------------------------------------------------------------------------------
 
-    # NOTE: You must also paste in the _is_valid_human_pose method here for completeness!
     def _is_valid_human_pose(self, landmarks: list[dict]) -> bool:
         # Implementation from your provided pose_estimator.py content
-        # ... (Pasted here)
         if not landmarks or len(landmarks) < 33:
             return False
         LEFT_SHOULDER = 11
@@ -134,9 +129,7 @@ class PoseStreamProcessor:
         except (ValueError, ZeroDivisionError): return False
         
         return True
-        # ----------------------------------------------------------------------------------
 
-    # The async definition must be changed to sync since Flask is sync unless you use Quart
     def process_frame_bytes(
         self, 
         frame_bytes: bytes, 
@@ -195,7 +188,8 @@ camera_timers = {}
 
 @app.route('/')
 def health_check():
-    return 'Fall Detection Service is Running'
+    # --- FIXED: Renders the index.html file from the 'templates' folder ---
+    return render_template('index.html')
 
 
 @app.route('/detect', methods=['POST'])
