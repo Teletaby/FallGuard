@@ -2,7 +2,16 @@
   "builds": [
     {
       "src": "app/fall_logic.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "externalPackages": [
+          "torch",
+          "torchvision",
+          "mediapipe",
+          "opencv-python",
+          "numpy"
+        ]
+      }
     }
   ],
   "routes": [
