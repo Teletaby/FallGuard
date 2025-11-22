@@ -1,0 +1,21 @@
+{
+  "builds": [
+    {
+      "src": "app/fall_logic.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
+    },
+    {
+      "src": "requirements.txt",
+      "use": "@vercel/static-build"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/.*",
+      "dest": "app/fall_logic.py"
+    }
+  ]
+}
