@@ -6,4 +6,4 @@ scikit-learn
 joblib
 mediapipe==0.10.9
 requests
-pushbullet
+python-pushbullet
