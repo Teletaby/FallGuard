@@ -3,568 +3,817 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FallGuard</title>
-    <!-- Load Tailwind CSS -->
+    <title>FallGuard - AI Fall Detection System</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', sans-serif;
         }
-        .hero-gradient {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 50%, #3f3f3f 100%);
         }
-        .dashboard-card {
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        .status-dot {
-            height: 12px;
-            width: 12px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 8px;
+        
+        .live-indicator {
+            animation: pulse-red 1.5s infinite;
         }
-        .live-status {
-            animation: pulse-live 1.5s infinite;
+        
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
         }
-        @keyframes pulse-live {
-            0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+        
+        .fall-alert {
+            animation: flash-alert 0.5s infinite alternate;
         }
-        .fall-detected {
-            animation: flash-fall 0.5s infinite alternate;
+        
+        @keyframes flash-alert {
+            from { background-color: #dc2626; }
+            to { background-color: #991b1b; }
         }
-        @keyframes flash-fall {
-            from { background-color: #ef4444; }
-            to { background-color: #b91c1c; }
-        }
+        
         .fade-in {
-            animation: fadeIn 0.5s ease-in;
+            animation: fadeIn 0.6s ease-out;
         }
+        
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
+            from { opacity: 0; transform: translateY(30px); }
             to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+        }
+        
+        .camera-thumbnail {
+            position: relative;
+            aspect-ratio: 16/9;
+            overflow: hidden;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        
+        .camera-thumbnail:hover {
+            transform: scale(1.05);
+            border-color: #3b82f6;
+            box-shadow: 0 8px 16px rgba(59, 130, 246, 0.3);
+        }
+        
+        .camera-thumbnail.active {
+            border-color: #10b981;
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+        }
+        
+        .camera-thumbnail.fall-detected {
+            border-color: #ef4444;
+            animation: pulse-red 1s infinite;
+        }
+        
+        .main-feed {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        
+        .main-feed img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .hero-section {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+            opacity: 0.3;
         }
     </style>
 </head>
-<body class="min-h-screen bg-gray-50">
-    <!-- Homepage -->
-    <div id="homepage" class="min-h-screen">
-        <!-- Hero Section -->
-        <div class="hero-gradient text-white">
-            <div class="container mx-auto px-6 py-24">
-                <div class="flex flex-col md:flex-row items-center">
-                    <div class="md:w-1/2 fade-in">
-                        <h1 class="text-5xl font-bold leading-tight mb-6">
-                            FallGuard: Protect Your Loved Ones
-                        </h1>
-                        <p class="text-xl mb-8 text-blue-100">
-                            A lightweight fall detection system for ultimate peace of mind and keeping your family safe.
-                        </p>
-                        <button onclick="showLiveFeeds()" class="bg-white text-indigo-600 font-bold py-4 px-8 rounded-lg text-lg hover:bg-gray-100 transition duration-300 transform hover:scale-105">
-                            View Live Feeds →
-                        </button>
+<body class="bg-gray-900 text-white">
+    
+    <!-- Landing Page -->
+    <div id="landing-page" class="hero-section gradient-bg">
+        <div class="container mx-auto px-6 relative z-10">
+            <div class="text-center max-w-4xl mx-auto fade-in">
+                <!-- Logo/Icon -->
+                <div class="mb-8">
+                    <div class="inline-block p-6 glass-effect rounded-full">
+                        <svg class="w-20 h-20 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                        </svg>
                     </div>
-                    <div class="md:w-1/2 mt-10 md:mt-0 fade-in">
-                        <div class="bg-white/10 backdrop-blur-sm rounded-2xl p-8">
-                            <div class="text-center">
-                                <div class="inline-flex items-center bg-red-500 text-white px-4 py-2 rounded-full mb-4">
-                                    <span class="status-dot bg-white live-status"></span>
-                                    LIVE MONITORING ACTIVE
-                                </div>
-                                <h3 class="text-2xl font-bold mb-4">Real-time Fall Detection</h3>
-                                <p class="text-blue-100">Monitoring that instantly alerts you when a fall is detected</p>
+                </div>
+                
+                <!-- Main Heading -->
+                <h1 class="text-6xl md:text-7xl font-bold mb-6 leading-tight">
+                    FallGuard: Protect Your<br>Loved Ones
+                </h1>
+                
+                <!-- Subheading -->
+                <p class="text-xl md:text-2xl text-gray-300 mb-12 max-w-2xl mx-auto font-light">
+                    A lightweight fall detection system for ultimate peace of mind and keeping your family safe.
+                </p>
+                
+                <!-- CTA Button -->
+                <button onclick="goToLiveFeed()" class="group relative inline-flex items-center gap-3 bg-white text-gray-900 px-8 py-4 rounded-full text-lg font-bold hover:bg-gray-100 transition-all duration-300 transform hover:scale-105 shadow-2xl">
+                    <span>LEARN MORE</span>
+                    <svg class="w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M9 5l7 7-7 7"/>
+                    </svg>
+                </button>
+                
+                <!-- Features Grid -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-20">
+                    <div class="glass-effect p-6 rounded-xl text-center">
+                        <div class="text-4xl mb-3">📹</div>
+                        <h3 class="font-bold text-lg mb-2">Real-time Monitoring</h3>
+                        <p class="text-sm text-gray-400">24/7 surveillance with instant alerts</p>
+                    </div>
+                    <div class="glass-effect p-6 rounded-xl text-center">
+                        <div class="text-4xl mb-3">🤖</div>
+                        <h3 class="font-bold text-lg mb-2">AI-Powered Detection</h3>
+                        <p class="text-sm text-gray-400">Advanced LSTM neural networks</p>
+                    </div>
+                    <div class="glass-effect p-6 rounded-xl text-center">
+                        <div class="text-4xl mb-3">⚡</div>
+                        <h3 class="font-bold text-lg mb-2">Instant Response</h3>
+                        <p class="text-sm text-gray-400">Get notified within seconds</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Live Feed Dashboard -->
+    <div id="live-feed" class="hidden min-h-screen bg-gray-900 p-4">
+        <!-- Header -->
+        <header class="bg-gray-800 rounded-xl p-4 mb-4 flex items-center justify-between shadow-lg">
+            <div class="flex items-center gap-4">
+                <button onclick="goToLanding()" class="text-gray-400 hover:text-white transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                </button>
+                <div>
+                    <h1 class="text-2xl font-bold">FallGuard</h1>
+                    <p class="text-sm text-gray-400">AI Fall Detection System</p>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <div class="status-badge bg-red-600 live-indicator">
+                    <span class="w-2 h-2 bg-white rounded-full"></span>
+                    <span>LIVE</span>
+                </div>
+                <button onclick="openSettings()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-semibold transition">
+                    ⚙️ Settings
+                </button>
+            </div>
+        </header>
+        
+        <!-- Main Content Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4" style="height: calc(100vh - 120px);">
+            <!-- Main Feed (Left) -->
+            <div class="lg:col-span-2 bg-gray-800 rounded-xl overflow-hidden relative shadow-2xl">
+                <div class="main-feed">
+                    <img id="main-stream-img" 
+                         src="/video_feed/main_webcam_0" 
+                         alt="Main Feed"
+                         onerror="handleMainStreamError(this)"
+                         onload="handleMainStreamLoad(this)">
+                    <div id="main-stream-error" class="hidden absolute inset-0 bg-gray-900 flex items-center justify-center flex-col">
+                        <svg class="w-24 h-24 mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                        </svg>
+                        <p class="text-gray-400 text-lg">Camera stream unavailable</p>
+                        <p class="text-gray-500 text-sm mt-2">Click a camera thumbnail to try again</p>
+                    </div>
+                </div>
+                
+                <!-- Main Feed Overlay Info -->
+                <div class="absolute top-4 left-4 flex gap-2">
+                    <div id="main-status-badge" class="status-badge bg-green-600">
+                        <span class="w-2 h-2 bg-white rounded-full live-indicator"></span>
+                        <span>NORMAL</span>
+                    </div>
+                </div>
+                
+                <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6">
+                    <h2 id="main-stream-name" class="text-2xl font-bold mb-1">Main Webcam Stream</h2>
+                    <p id="main-stream-info" class="text-sm text-gray-300">Confidence: 0% | Threshold: 95%</p>
+                </div>
+                
+                <!-- Fall Alert Banner -->
+                <div id="fall-alert-overlay" class="hidden absolute bottom-0 left-0 right-0 bg-red-600 text-white shadow-2xl">
+                    <div class="fall-alert px-6 py-4 flex items-center justify-between">
+                        <div class="flex items-center gap-4">
+                            <div class="text-3xl animate-bounce">⚠️</div>
+                            <div>
+                                <h3 class="text-xl font-bold">FALL DETECTED!</h3>
+                                <p id="fall-location" class="text-sm opacity-90">Camera Location</p>
                             </div>
                         </div>
+                        <button onclick="dismissAlert()" class="text-white hover:text-gray-200 text-2xl font-bold px-3">&times;</button>
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Features Section -->
-        <div class="py-20 bg-white">
-            <div class="container mx-auto px-6">
-                <h2 class="text-4xl font-bold text-center text-gray-800 mb-16">How FallGuard Works</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <div class="text-center fade-in">
-                        <div class="bg-indigo-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <span class="text-2xl">📹</span>
-                        </div>
-                        <h3 class="text-xl font-bold mb-4">Camera Monitoring</h3>
-                        <p class="text-gray-600">Connect multiple cameras to monitor different areas of your home</p>
-                    </div>
-                    <div class="text-center fade-in">
-                        <div class="bg-indigo-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <span class="text-2xl">🤖</span>
-                        </div>
-                        <h3 class="text-xl font-bold mb-4">AI Detection</h3>
-                        <p class="text-gray-600">Advanced LSTM neural network detects falls with high accuracy</p>
-                    </div>
-                    <div class="text-center fade-in">
-                        <div class="bg-indigo-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <span class="text-2xl">🚨</span>
-                        </div>
-                        <h3 class="text-xl font-bold mb-4">Instant Alerts</h3>
-                        <p class="text-gray-600">Get immediate notifications when a fall is detected</p>
-                    </div>
+            
+            <!-- Camera Grid (Right) -->
+            <div class="bg-gray-800 rounded-xl p-4 overflow-y-auto shadow-xl">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="font-bold text-lg">All Cameras</h3>
+                    <button onclick="openAddCamera()" class="w-8 h-8 bg-blue-600 hover:bg-blue-700 rounded-full flex items-center justify-center transition">
+                        <span class="text-xl">+</span>
+                    </button>
+                </div>
+                
+                <div id="camera-grid" class="video-grid">
+                    <!-- Camera thumbnails will be inserted here -->
+                </div>
+                
+                <div id="no-cameras" class="hidden text-center py-12 text-gray-500">
+                    <svg class="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                    </svg>
+                    <p>No cameras available</p>
                 </div>
             </div>
         </div>
     </div>
-
-    <!-- Dashboard (Hidden Initially) -->
-    <div id="dashboard" class="min-h-screen hidden">
-        <div class="p-4 md:p-8">
-            <!-- Header -->
-            <header class="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-xl shadow-lg mb-8">
-                <div class="flex items-center space-x-4 mb-4 md:mb-0">
-                    <button onclick="showHomepage()" class="text-gray-600 hover:text-indigo-600 transition duration-150">
-                        ← Back to Home
-                    </button>
-                    <h1 class="text-3xl font-bold text-gray-800">
-                        <span class="text-indigo-600">FallGuard</span> Live Monitoring
-                    </h1>
-                </div>
-                <div class="flex items-center space-x-4">
-                    <button id="admin-btn" onclick="openModal('admin-login-modal')" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-150">
-                        Admin Panel
-                    </button>
-                </div>
-            </header>
-
-            <!-- Main Content -->
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                <!-- Main Stream View -->
-                <div class="lg:col-span-2 dashboard-card bg-gray-900 rounded-xl overflow-hidden p-0 relative">
-                    <div id="main-video-stream" class="stream-container w-full h-full">
-                        <img id="main-stream-img" src="/video_feed/main_webcam_0" alt="Main Live Video Stream" class="w-full h-full object-cover">
-                    </div>
-                    <div class="absolute top-4 left-4 bg-black bg-opacity-70 text-white px-4 py-2 rounded-full flex items-center">
-                        <span id="main-stream-status-dot" class="status-dot bg-green-500 live-status"></span>
-                        <span id="main-stream-status-text" class="font-semibold">LIVE</span>
-                    </div>
-                    <div class="absolute bottom-0 left-0 right-0 bg-gray-800 bg-opacity-70 text-white p-4">
-                        <h2 id="main-stream-name" class="text-xl font-bold">Main Webcam Stream</h2>
-                        <p id="main-stream-location" class="text-sm text-gray-400">Click a camera to view its stream</p>
-                    </div>
-                </div>
-
-                <!-- Camera Grid -->
-                <div class="lg:col-span-1 dashboard-card bg-white p-6 rounded-xl h-[80vh] overflow-y-auto">
-                    <h2 class="text-xl font-semibold text-gray-800 mb-4 sticky top-0 bg-white z-10 py-2 -mt-2">
-                        Active Cameras
-                    </h2>
-                    <div id="camera-dashboard" class="grid grid-cols-1 gap-4">
-                        <!-- Camera cards will be rendered here -->
-                    </div>
-                    <div id="no-cameras-msg" class="text-center text-gray-500 p-8 hidden">
-                        No active cameras. Use the Admin Panel to add a new stream.
-                    </div>
-                </div>
+    
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-gray-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div class="p-6 border-b border-gray-700 flex items-center justify-between">
+                <h2 class="text-2xl font-bold">Settings & Controls</h2>
+                <button onclick="closeSettings()" class="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
             </div>
-
-            <!-- Alert Banner -->
-            <div id="fall-alert-banner" class="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 hidden">
-                <div class="bg-red-500 text-white px-8 py-4 rounded-lg shadow-lg flex items-center space-x-4">
-                    <div class="flex items-center">
-                        <span class="status-dot bg-white live-status"></span>
-                        <span class="font-bold text-lg">FALL DETECTED!</span>
-                    </div>
-                    <span id="fall-alert-location" class="text-lg">Hallway</span>
-                    <button onclick="closeFallAlert()" class="text-white hover:text-gray-200 text-xl">×</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- System Message Box -->
-    <div id="system-message-box" class="fixed bottom-4 right-4 z-50"></div>
-
-    <!-- Admin Login Modal -->
-    <div id="admin-login-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 hidden">
-        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-2xl font-bold text-center text-indigo-600">Admin Login</h2>
-                <button onclick="closeModal('admin-login-modal')" class="text-gray-500 hover:text-gray-800 text-3xl">&times;</button>
-            </div>
-            <form id="admin-auth-form" class="space-y-4">
-                <div>
-                    <label for="admin-password" class="block text-sm font-medium text-gray-700">Password</label>
-                    <input type="password" id="admin-password" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border" required>
-                </div>
-                <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition duration-150">Log In</button>
-            </form>
-            <p id="admin-auth-error" class="mt-4 text-center text-sm text-red-500"></p>
-        </div>
-    </div>
-
-    <!-- Admin Panel Modal -->
-    <div id="admin-panel-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center z-50 hidden">
-        <div class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-2xl font-bold text-gray-800">Admin Panel & Controls</h2>
-                <button onclick="closeModal('admin-panel-modal'); handleAdminLogout();" class="text-gray-500 hover:text-gray-800 text-3xl">&times;</button>
-            </div>
-
-            <div role="tablist" class="flex border-b mb-6">
-                <button id="tab-settings" onclick="switchAdminTab('settings')" class="py-2 px-4 text-center font-medium border-b-2 border-indigo-600 text-indigo-600">Detection Settings</button>
-                <button id="tab-cameras" onclick="switchAdminTab('cameras')" class="py-2 px-4 text-center font-medium border-b-2 border-transparent text-gray-600">Add/Manage Streams</button>
-            </div>
-
-            <!-- Settings Tab -->
-            <div id="content-settings" class="space-y-6">
-                <h3 class="text-xl font-semibold text-gray-800">Global Detection Settings</h3>
-                <form id="settings-form" class="space-y-4 dashboard-card bg-gray-50 p-4 rounded-lg">
-                    <div>
-                        <label for="fall-threshold" class="block text-sm font-medium text-gray-700">Fall Probability Threshold (0.0 to 1.0)</label>
-                        <input type="number" id="fall-threshold" step="0.01" min="0.0" max="1.0" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-2 border" placeholder="0.95" required>
-                        <p class="text-xs text-gray-500 mt-1">Confidence score required to flag a fall.</p>
-                    </div>
-                    <div>
-                        <label for="fall-delay-seconds" class="block text-sm font-medium text-gray-700">Fall Confirmation Delay (Seconds)</label>
-                        <input type="number" id="fall-delay-seconds" min="1" max="10" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-2 border" placeholder="3" required>
-                        <p class="text-xs text-gray-500 mt-1">Time required for continuous detection before alert is raised.</p>
-                    </div>
-                    <button type="submit" class="w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded-lg transition duration-150">
-                        Save Settings
-                    </button>
-                    <p id="settings-message" class="text-sm text-center text-green-700"></p>
-                </form>
-            </div>
-
-            <!-- Cameras Tab -->
-            <div id="content-cameras" class="space-y-6 hidden">
-                <div class="dashboard-card bg-gray-50 p-4 rounded-lg space-y-4">
-                    <h3 class="text-xl font-semibold text-gray-800">Add New Stream</h3>
-                    
-                    <div class="flex space-x-4">
-                        <button id="toggle-live-btn" class="flex-1 text-sm py-2 rounded-lg font-semibold bg-indigo-600 text-white transition duration-150">
-                            Webcam / Live Stream
+            
+            <div class="p-6 space-y-6">
+                <!-- Detection Settings -->
+                <div class="bg-gray-900 rounded-xl p-6">
+                    <h3 class="text-lg font-bold mb-4">Detection Parameters</h3>
+                    <form id="settings-form" class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Fall Probability Threshold</label>
+                            <input type="number" id="fall-threshold" step="0.01" min="0" max="1" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" value="0.95">
+                            <p class="text-xs text-gray-500 mt-1">Confidence level required (0.0 - 1.0)</p>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium mb-2">Confirmation Delay (seconds)</label>
+                            <input type="number" id="fall-delay" min="1" max="10" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" value="3">
+                            <p class="text-xs text-gray-500 mt-1">Continuous detection time before alert</p>
+                        </div>
+                        
+                        <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition">
+                            Save Settings
                         </button>
-                        <button id="toggle-upload-btn" class="flex-1 text-sm py-2 rounded-lg font-semibold text-indigo-600 bg-indigo-100 hover:bg-indigo-200 transition duration-150">
-                            Video File Upload
-                        </button>
-                    </div>
-
-                    <form id="add-stream-form" class="space-y-4">
-                        <div>
-                            <label for="stream-name" class="block text-sm font-medium text-gray-700">Camera Name</label>
-                            <input type="text" id="stream-name" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-2 border" placeholder="e.g., Living Room Camera" required>
-                        </div>
-                        <div>
-                            <label for="stream-source" class="block text-sm font-medium text-gray-700">Source (Webcam Index or URL)</label>
-                            <input type="text" id="stream-source" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-2 border" placeholder="e.g., 0 for laptop cam, 1 for USB cam" required>
-                        </div>
-                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition duration-150">Start New Stream</button>
-                    </form>
-                    
-                    <form id="upload-video-form" class="space-y-4 hidden">
-                        <div>
-                            <label for="upload-name" class="block text-sm font-medium text-gray-700">Camera Name for Upload</label>
-                            <input type="text" id="upload-name" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-2 border" placeholder="e.g., Test Video 1" required>
-                        </div>
-                        <div>
-                            <label for="video-file" class="block text-sm font-medium text-gray-700">Video File</label>
-                            <input type="file" id="video-file" accept="video/*" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" required>
-                        </div>
-                        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-lg transition duration-150">Upload & Start Stream</button>
                     </form>
                 </div>
-
-                <div class="dashboard-card bg-white p-0 rounded-xl">
-                    <h3 class="text-xl font-semibold text-gray-800 mb-4">Manage Streams</h3>
-                    <div id="stored-cameras-list" class="space-y-2">
-                        <p class="text-gray-500 text-sm text-center p-4">Loading stream list...</p>
+                
+                <!-- Add Camera -->
+                <div class="bg-gray-900 rounded-xl p-6">
+                    <h3 class="text-lg font-bold mb-4">Add Camera Source</h3>
+                    
+                    <div class="flex gap-2 mb-4">
+                        <button id="tab-webcam" onclick="switchTab('webcam')" class="flex-1 py-2 rounded-lg bg-blue-600 font-semibold">Webcam/URL</button>
+                        <button id="tab-upload" onclick="switchTab('upload')" class="flex-1 py-2 rounded-lg bg-gray-700 font-semibold">Video File</button>
+                    </div>
+                    
+                    <form id="add-camera-form" class="space-y-4">
+                        <input type="text" id="camera-name" placeholder="Camera Name (e.g., Living Room)" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" required>
+                        <div>
+                            <input type="text" id="camera-source" placeholder="Source (0 for webcam, URL, or path)" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" required>
+                            <p class="text-xs text-gray-500 mt-2">Examples: 0, 1, 2 (webcam index) or http://192.168.1.100:8080/video</p>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition">
+                            Add Camera
+                        </button>
+                    </form>
+                    
+                    <form id="upload-form" class="space-y-4 hidden">
+                        <input type="text" id="upload-name" placeholder="Stream Name (e.g., Test Fall Video)" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 outline-none" required>
+                        <div class="w-full">
+                            <label class="block text-sm font-medium mb-2 text-gray-300">Select Video File</label>
+                            <input type="file" id="video-file" accept="video/*" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-gray-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer hover:file:bg-blue-700 cursor-pointer" required>
+                            <p class="text-xs text-gray-500 mt-2">Supported: MP4, AVI, MOV, MKV (Max 500MB)</p>
+                        </div>
+                        <div id="upload-progress" class="hidden">
+                            <div class="w-full bg-gray-700 rounded-full h-2 mb-2">
+                                <div id="upload-progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                            </div>
+                            <p id="upload-progress-text" class="text-sm text-gray-400 text-center">Uploading...</p>
+                        </div>
+                        <button type="submit" id="upload-submit-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition">
+                            Upload & Start Stream
+                        </button>
+                    </form>
+                </div>
+                
+                <!-- Manage Cameras -->
+                <div class="bg-gray-900 rounded-xl p-6">
+                    <h3 class="text-lg font-bold mb-4">Manage Cameras</h3>
+                    <div id="camera-list" class="space-y-2">
+                        <p class="text-gray-500 text-sm text-center py-4">Loading...</p>
                     </div>
                 </div>
             </div>
         </div>
     </div>
+    
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
 
     <script>
-        // Global state
-        const API_BASE = '/api';
-        let state = {
-            isAdmin: false,
+        // State Management
+        const state = {
             cameras: [],
-            definitions: [],
-            settings: {},
-            isPolling: false,
-            pollingInterval: null,
             mainStreamId: 'main_webcam_0',
+            pollingInterval: null,
+            settings: {
+                fall_threshold: 0.95,
+                fall_delay_seconds: 3
+            }
         };
-        const POLLING_RATE = 2000;
 
-        // Page Navigation
-        function showHomepage() {
-            document.getElementById('dashboard').classList.add('hidden');
-            document.getElementById('homepage').classList.remove('hidden');
+        // Navigation
+        function goToLiveFeed() {
+            document.getElementById('landing-page').classList.add('hidden');
+            document.getElementById('live-feed').classList.remove('hidden');
+            startPolling();
         }
 
-        function showLiveFeeds() {
-            document.getElementById('homepage').classList.add('hidden');
-            document.getElementById('dashboard').classList.remove('hidden');
-            if (!state.isPolling) {
-                startPolling();
+        function goToLanding() {
+            document.getElementById('live-feed').classList.add('hidden');
+            document.getElementById('landing-page').classList.remove('hidden');
+            stopPolling();
+        }
+
+        // Modal Controls
+        function openSettings() {
+            document.getElementById('settings-modal').classList.remove('hidden');
+            loadSettings();
+            loadCameraList();
+        }
+
+        function closeSettings() {
+            document.getElementById('settings-modal').classList.add('hidden');
+        }
+
+        function openAddCamera() {
+            openSettings();
+            document.querySelector('#settings-modal').scrollTop = document.querySelector('#settings-modal').scrollHeight;
+        }
+
+        function switchTab(tab) {
+            const webcamBtn = document.getElementById('tab-webcam');
+            const uploadBtn = document.getElementById('tab-upload');
+            const webcamForm = document.getElementById('add-camera-form');
+            const uploadForm = document.getElementById('upload-form');
+
+            if (tab === 'webcam') {
+                webcamBtn.classList.add('bg-blue-600');
+                webcamBtn.classList.remove('bg-gray-700');
+                uploadBtn.classList.remove('bg-blue-600');
+                uploadBtn.classList.add('bg-gray-700');
+                webcamForm.classList.remove('hidden');
+                uploadForm.classList.add('hidden');
+            } else {
+                uploadBtn.classList.add('bg-blue-600');
+                uploadBtn.classList.remove('bg-gray-700');
+                webcamBtn.classList.remove('bg-blue-600');
+                webcamBtn.classList.add('bg-gray-700');
+                uploadForm.classList.remove('hidden');
+                webcamForm.classList.add('hidden');
             }
         }
 
-        function closeFallAlert() {
-            document.getElementById('fall-alert-banner').classList.add('hidden');
-        }
-
-        // Utility Functions
-        function showMessage(message, type = 'success') {
-            const box = document.getElementById('system-message-box');
-            const color = type === 'error' ? 'bg-red-500' : type === 'warning' ? 'bg-yellow-500' : 'bg-green-500';
-            const html = `
-                <div class="${color} text-white p-3 rounded-lg shadow-xl mb-3 transition transform duration-300 ease-out fade-in">
-                    ${message}
-                </div>
-            `;
-            box.insertAdjacentHTML('afterbegin', html);
+        // Toast Notifications
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const colors = {
+                success: 'bg-green-600',
+                error: 'bg-red-600',
+                warning: 'bg-yellow-600',
+                info: 'bg-blue-600'
+            };
             
-            const newMessage = box.firstChild;
+            const toast = document.createElement('div');
+            toast.className = `${colors[type]} text-white px-6 py-3 rounded-lg shadow-xl fade-in`;
+            toast.textContent = message;
+            
+            container.appendChild(toast);
+            
             setTimeout(() => {
-                newMessage.classList.add('opacity-0');
-                newMessage.addEventListener('transitionend', () => newMessage.remove());
-            }, 5000);
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(100%)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
         }
 
-        async function apiFetch(endpoint, options = {}) {
-            const response = await fetch(`${API_BASE}${endpoint}`, {
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...options.headers
-                },
-                ...options,
-                body: options.body ? JSON.stringify(options.body) : null
-            });
-
-            if (!response.ok) {
-                throw new Error(`API Error: ${response.status}`);
-            }
-            
-            if (response.status === 204) {
-                return { success: true };
-            }
-            
-            return response.json();
-        }
-
-        // Modal Control
-        function openModal(id) {
-            document.getElementById(id).classList.remove('hidden');
-        }
-
-        function closeModal(id) {
-            document.getElementById(id).classList.add('hidden');
-        }
-
-        function switchAdminTab(tabName) {
-            ['settings', 'cameras'].forEach(tab => {
-                const btn = document.getElementById(`tab-${tab}`);
-                const content = document.getElementById(`content-${tab}`);
-                if (tab === tabName) {
-                    btn.classList.add('text-indigo-600', 'border-indigo-600');
-                    content.classList.remove('hidden');
-                } else {
-                    btn.classList.remove('text-indigo-600', 'border-indigo-600');
-                    content.classList.add('hidden');
-                }
-            });
-        }
-
-        // Stream Management
-        function displayMainStream(cameraId) {
-            const targetCam = state.cameras.find(c => c.id === cameraId);
-            if (!targetCam) return;
-
-            state.mainStreamId = cameraId;
-            const mainImg = document.getElementById('main-stream-img');
-            mainImg.src = `/video_feed/${cameraId}?t=${Date.now()}`;
-            
-            document.getElementById('main-stream-name').textContent = targetCam.name;
-            document.getElementById('main-stream-location').textContent = `Live from ${targetCam.name}`;
-            
-            updateMainStreamStatus(targetCam);
-        }
-
-        function updateMainStreamStatus(camera) {
-            const isFalling = camera.color === 'red';
-            const statusDot = document.getElementById('main-stream-status-dot');
-            const statusText = document.getElementById('main-stream-status-text');
-            
-            if (isFalling) {
-                statusDot.className = 'status-dot bg-red-500 live-status fall-detected';
-                statusText.textContent = 'FALL DETECTED';
-                document.querySelector('.lg\\:col-span-2').style.border = '4px solid #ef4444';
+        // API Calls
+        async function apiCall(endpoint, options = {}) {
+            try {
+                const response = await fetch(`/api${endpoint}`, {
+                    headers: {'Content-Type': 'application/json'},
+                    ...options
+                });
                 
-                // Show fall alert banner
-                document.getElementById('fall-alert-location').textContent = camera.name;
-                document.getElementById('fall-alert-banner').classList.remove('hidden');
-            } else {
-                statusDot.className = 'status-dot bg-green-500 live-status';
-                statusText.textContent = 'LIVE';
-                document.querySelector('.lg\\:col-span-2').style.border = 'none';
+                if (!response.ok) throw new Error(`API Error: ${response.status}`);
+                return response.json();
+            } catch (error) {
+                console.error('API call failed:', error);
+                showToast('Operation failed', 'error');
+                throw error;
             }
         }
 
-        function renderCameraCard(camera) {
-            const isFalling = camera.color === 'red';
-            const statusColor = isFalling ? 'bg-red-500' : 'bg-green-500';
+        // Settings
+        async function loadSettings() {
+            const data = await apiCall('/settings');
+            state.settings = data.settings;
+            document.getElementById('fall-threshold').value = data.settings.fall_threshold;
+            document.getElementById('fall-delay').value = data.settings.fall_delay_seconds;
+        }
+
+        document.getElementById('settings-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await apiCall('/settings', {
+                method: 'POST',
+                body: JSON.stringify({
+                    fall_threshold: parseFloat(document.getElementById('fall-threshold').value),
+                    fall_delay_seconds: parseInt(document.getElementById('fall-delay').value)
+                })
+            });
+            showToast('Settings saved successfully');
+        });
+
+        // Camera Management
+        async function loadCameras() {
+            try {
+                const data = await apiCall('/cameras');
+                state.cameras = data.cameras;
+                
+                console.log('Cameras loaded:', state.cameras.length);
+                
+                // If current main stream doesn't exist or is offline, switch to first available
+                const currentCamera = state.cameras.find(c => c.id === state.mainStreamId);
+                if (!currentCamera || !currentCamera.isLive) {
+                    const firstLive = state.cameras.find(c => c.isLive);
+                    if (firstLive) {
+                        state.mainStreamId = firstLive.id;
+                        console.log('Switched to first available camera:', firstLive.name);
+                    }
+                }
+                
+                renderCameraGrid();
+                updateMainFeed();
+            } catch (error) {
+                console.error('Failed to load cameras:', error);
+            }
+        }
+
+        function renderCameraGrid() {
+            const grid = document.getElementById('camera-grid');
+            const noMsg = document.getElementById('no-cameras');
             
-            return `
-                <div onclick="displayMainStream('${camera.id}')" 
-                     class="camera-card dashboard-card bg-gray-50 border-2 ${isFalling ? 'border-red-500' : 'border-gray-200'} rounded-xl overflow-hidden shadow-md cursor-pointer transition duration-200 hover:shadow-lg">
-                    <div class="stream-container relative">
-                        <img src="/video_feed/${camera.id}" alt="${camera.name}" class="w-full h-32 object-cover">
-                        <div class="absolute top-2 right-2 bg-black bg-opacity-70 text-white text-xs font-bold px-2 py-1 rounded-full flex items-center">
-                            <span class="status-dot ${statusColor} live-status"></span>
-                            ${isFalling ? 'FALL DETECTED' : 'LIVE'}
+            if (state.cameras.length === 0) {
+                grid.classList.add('hidden');
+                noMsg.classList.remove('hidden');
+                return;
+            }
+            
+            grid.classList.remove('hidden');
+            noMsg.classList.add('hidden');
+            
+            grid.innerHTML = state.cameras.map(cam => {
+                const isActive = cam.id === state.mainStreamId;
+                const isFall = cam.color === 'red';
+                const isLive = cam.isLive;
+                
+                return `
+                <div class="camera-thumbnail ${isActive ? 'active' : ''} ${isFall ? 'fall-detected' : ''}" 
+                     onclick="switchMainFeed('${cam.id}')"
+                     data-camera-id="${cam.id}">
+                    ${isLive ? `
+                        <img src="/video_feed/${cam.id}" 
+                             class="w-full h-full object-cover"
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+                             onload="this.style.display='block'; if(this.nextElementSibling) this.nextElementSibling.style.display='none';"
+                             style="display: block;">
+                        <div class="absolute inset-0 bg-gray-700 flex items-center justify-center flex-col text-center p-2" style="display: none;">
+                            <svg class="w-8 h-8 mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                            </svg>
+                            <p class="text-xs">Stream Error</p>
                         </div>
+                    ` : `
+                        <div class="absolute inset-0 bg-gray-700 flex items-center justify-center flex-col text-center p-2">
+                            <svg class="w-8 h-8 mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                            </svg>
+                            <p class="text-xs">Offline</p>
+                        </div>
+                    `}
+                    <div class="absolute top-2 left-2 status-badge ${isFall ? 'bg-red-600' : isLive ? 'bg-green-600' : 'bg-gray-600'} text-xs">
+                        ${isFall ? '⚠️ FALL' : isLive ? '✓ OK' : '○ OFF'}
                     </div>
-                    <div class="p-3">
-                        <h3 class="font-semibold text-gray-800 truncate">${camera.name}</h3>
-                        <p class="text-xs text-gray-500">Confidence: ${(camera.confidence_score * 100).toFixed(1)}%</p>
+                    <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-2">
+                        <p class="text-xs font-semibold truncate">${cam.name}</p>
+                        ${!isLive ? '<p class="text-xs text-gray-400">Camera stopped</p>' : ''}
                     </div>
                 </div>
-            `;
+            `}).join('');
         }
 
-        async function fetchCameras() {
+        function switchMainFeed(cameraId) {
+            state.mainStreamId = cameraId;
+            const img = document.getElementById('main-stream-img');
+            const errorDiv = document.getElementById('main-stream-error');
+            
+            img.style.display = 'block';
+            errorDiv.classList.add('hidden');
+            img.src = `/video_feed/${cameraId}`;
+            
+            renderCameraGrid();
+            updateMainFeed();
+        }
+
+        function handleMainStreamError(img) {
+            img.style.display = 'none';
+            document.getElementById('main-stream-error').classList.remove('hidden');
+        }
+
+        function handleMainStreamLoad(img) {
+            img.style.display = 'block';
+            document.getElementById('main-stream-error').classList.add('hidden');
+        }
+
+        function updateMainFeed() {
+            const camera = state.cameras.find(c => c.id === state.mainStreamId);
+            if (!camera) return;
+            
+            const badge = document.getElementById('main-status-badge');
+            const name = document.getElementById('main-stream-name');
+            const info = document.getElementById('main-stream-info');
+            const alert = document.getElementById('fall-alert-overlay');
+            
+            name.textContent = camera.name;
+            info.textContent = `Confidence: ${(camera.confidence_score * 100).toFixed(1)}% | Threshold: ${(camera.model_threshold * 100).toFixed(0)}%`;
+            
+            if (camera.color === 'red') {
+                badge.className = 'status-badge bg-red-600 fall-alert';
+                badge.innerHTML = '<span class="w-2 h-2 bg-white rounded-full live-indicator"></span><span>FALL DETECTED</span>';
+                alert.classList.remove('hidden');
+                document.getElementById('fall-location').textContent = camera.name;
+            } else {
+                badge.className = 'status-badge bg-green-600';
+                badge.innerHTML = '<span class="w-2 h-2 bg-white rounded-full live-indicator"></span><span>NORMAL</span>';
+                alert.classList.add('hidden');
+            }
+        }
+
+        function dismissAlert() {
+            document.getElementById('fall-alert-overlay').classList.add('hidden');
+        }
+
+        // Add Camera
+        document.getElementById('add-camera-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await apiCall('/cameras/add', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: document.getElementById('camera-name').value,
+                    source: document.getElementById('camera-source').value
+                })
+            });
+            showToast('Camera added successfully');
+            e.target.reset();
+            loadCameras();
+        });
+
+        document.getElementById('upload-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const nameInput = document.getElementById('upload-name');
+            const fileInput = document.getElementById('video-file');
+            const submitBtn = document.getElementById('upload-submit-btn');
+            const progressDiv = document.getElementById('upload-progress');
+            const progressBar = document.getElementById('upload-progress-bar');
+            const progressText = document.getElementById('upload-progress-text');
+            
+            if (!nameInput.value || !fileInput.files[0]) {
+                showToast('Please provide a name and select a video file', 'error');
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const maxSize = 500 * 1024 * 1024;
+            
+            if (file.size > maxSize) {
+                showToast('File too large. Maximum size is 500MB', 'error');
+                return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="inline-block animate-spin mr-2">⏳</span>Uploading...';
+            progressDiv.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Uploading...';
+            
+            const formData = new FormData();
+            formData.append('name', nameInput.value);
+            formData.append('video_file', file);
+            
             try {
-                const data = await apiFetch('/cameras');
-                state.cameras = data.cameras;
-                renderDashboard();
+                const xhr = new XMLHttpRequest();
                 
-                // Update main stream if it exists
-                const currentMain = state.cameras.find(c => c.id === state.mainStreamId);
-                if (currentMain) {
-                    updateMainStreamStatus(currentMain);
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const percentComplete = (e.loaded / e.total) * 100;
+                        progressBar.style.width = percentComplete + '%';
+                        progressText.textContent = `Uploading: ${Math.round(percentComplete)}%`;
+                    }
+                });
+                
+                xhr.addEventListener('load', async () => {
+                    if (xhr.status === 200) {
+                        const data = JSON.parse(xhr.responseText);
+                        
+                        if (data.success) {
+                            progressText.textContent = 'Processing video...';
+                            progressBar.style.width = '100%';
+                            
+                            showToast('Video uploaded successfully!', 'success');
+                            e.target.reset();
+                            
+                            await loadCameras();
+                            await loadCameraList();
+                            
+                            if (data.camera_id) {
+                                setTimeout(() => {
+                                    switchMainFeed(data.camera_id);
+                                }, 500);
+                            }
+                        } else {
+                            showToast(data.message || 'Upload failed', 'error');
+                        }
+                    } else {
+                        showToast('Upload failed: Server error', 'error');
+                    }
+                    
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = 'Upload & Start Stream';
+                    progressDiv.classList.add('hidden');
+                });
+                
+                xhr.addEventListener('error', () => {
+                    showToast('Upload failed: Network error', 'error');
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = 'Upload & Start Stream';
+                    progressDiv.classList.add('hidden');
+                });
+                
+                xhr.open('POST', '/api/cameras/upload');
+                xhr.send(formData);
+                
+            } catch (error) {
+                console.error('Upload error:', error);
+                showToast('Upload failed: ' + error.message, 'error');
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = 'Upload & Start Stream';
+                progressDiv.classList.add('hidden');
+            }
+        });
+
+        // Camera List Management
+        async function loadCameraList() {
+            const data = await apiCall('/cameras/all_definitions');
+            const list = document.getElementById('camera-list');
+            
+            if (data.definitions.length === 0) {
+                list.innerHTML = '<p class="text-gray-500 text-sm text-center py-4">No cameras configured</p>';
+                return;
+            }
+            
+            list.innerHTML = data.definitions.map(cam => `
+                <div class="flex items-center justify-between p-3 bg-gray-800 rounded-lg">
+                    <div class="flex-1">
+                        <p class="font-semibold">${cam.name}</p>
+                        <p class="text-xs text-gray-500">Source: ${cam.source}</p>
+                        <p class="text-xs ${cam.isLive ? 'text-green-500' : 'text-gray-500'}">
+                            ${cam.isLive ? '● Live' : '○ Stopped'}
+                        </p>
+                    </div>
+                    <div class="flex gap-2">
+                        ${cam.isLive ? 
+                            `<button onclick="stopCamera('${cam.id}')" class="px-3 py-1 bg-red-600 hover:bg-red-700 rounded text-sm font-medium transition">Stop</button>` :
+                            `<button onclick="startCamera('${cam.id}')" class="px-3 py-1 bg-green-600 hover:bg-green-700 rounded text-sm font-medium transition">Start</button>`
+                        }
+                        <button onclick="removeCamera('${cam.id}')" class="px-3 py-1 bg-gray-600 hover:bg-gray-700 rounded text-sm font-medium transition">Remove</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function stopCamera(id) {
+            if (!confirm('Stop this camera stream?')) return;
+            await apiCall(`/cameras/stop/${id}`, { method: 'POST' });
+            showToast('Camera stopped');
+            loadCameras();
+            loadCameraList();
+        }
+
+        async function startCamera(id) {
+            await apiCall('/cameras/add_existing', {
+                method: 'POST',
+                body: JSON.stringify({ camera_id: id })
+            });
+            showToast('Camera started');
+            loadCameras();
+            loadCameraList();
+        }
+
+        async function removeCamera(id) {
+            if (!confirm('Permanently remove this camera? This cannot be undone.')) return;
+            
+            try {
+                await fetch(`/api/cameras/remove/${id}`, { method: 'DELETE' });
+                showToast('Camera removed');
+                
+                if (state.mainStreamId === id) {
+                    const remaining = state.cameras.filter(c => c.id !== id);
+                    if (remaining.length > 0) {
+                        switchMainFeed(remaining[0].id);
+                    }
                 }
-            } catch (e) {
-                console.error("Failed to fetch cameras:", e);
-            }
-        }
-
-        function renderDashboard() {
-            const dashboard = document.getElementById('camera-dashboard');
-            const noCamerasMsg = document.getElementById('no-cameras-msg');
-            
-            if (state.cameras.length > 0) {
-                noCamerasMsg.classList.add('hidden');
-                dashboard.innerHTML = state.cameras.map(renderCameraCard).join('');
-            } else {
-                noCamerasMsg.classList.remove('hidden');
-                dashboard.innerHTML = '';
-            }
-        }
-
-        // Admin Functions
-        async function handleAdminLogin(e) {
-            e.preventDefault();
-            const password = document.getElementById('admin-password').value;
-            
-            if (password === 'admin') {
-                state.isAdmin = true;
-                showMessage('Admin login successful');
-                closeModal('admin-login-modal');
-                openModal('admin-panel-modal');
-                document.getElementById('admin-btn').textContent = 'Admin (Logged In)';
-                document.getElementById('admin-btn').classList.add('bg-green-600', 'hover:bg-green-700');
-                fetchSettings();
-            } else {
-                document.getElementById('admin-auth-error').textContent = 'Invalid password';
-                showMessage('Invalid admin password', 'error');
-            }
-        }
-
-        function handleAdminLogout() {
-            state.isAdmin = false;
-            document.getElementById('admin-btn').textContent = 'Admin Panel';
-            document.getElementById('admin-btn').classList.remove('bg-green-600', 'hover:bg-green-700');
-            showMessage("Admin logged out");
-        }
-
-        async function fetchSettings() {
-            try {
-                const data = await apiFetch('/settings');
-                state.settings = data.settings;
-                document.getElementById('fall-threshold').value = state.settings.fall_threshold || 0.95;
-                document.getElementById('fall-delay-seconds').value = state.settings.fall_delay_seconds || 3;
-            } catch (e) {
-                console.error("Failed to fetch settings:", e);
-            }
-        }
-
-        async function handleSaveSettings(e) {
-            e.preventDefault();
-            if (!state.isAdmin) return;
-            
-            const threshold = parseFloat(document.getElementById('fall-threshold').value);
-            const delay = parseInt(document.getElementById('fall-delay-seconds').value);
-            
-            try {
-                await apiFetch('/settings', {
-                    method: 'POST',
-                    body: { fall_threshold: threshold, fall_delay_seconds: delay }
-                });
-                showMessage('Settings saved successfully');
-            } catch (e) {
-                showMessage('Failed to save settings', 'error');
-            }
-        }
-
-        async function handleAddStream(e) {
-            e.preventDefault();
-            const name = document.getElementById('stream-name').value;
-            const source = document.getElementById('stream-source').value;
-            
-            try {
-                await apiFetch('/cameras/add', {
-                    method: 'POST',
-                    body: { name, source }
-                });
-                showMessage('Camera added successfully');
-                document.getElementById('add-stream-form').reset();
-                fetchCameras();
-            } catch (e) {
-                showMessage('Failed to add camera', 'error');
+                
+                loadCameras();
+                loadCameraList();
+            } catch (error) {
+                showToast('Failed to remove camera', 'error');
             }
         }
 
         // Polling
         function startPolling() {
-            state.isPolling = true;
-            fetchCameras();
-            state.pollingInterval = setInterval(fetchCameras, POLLING_RATE);
+            loadCameras();
+            state.pollingInterval = setInterval(() => {
+                loadCameras();
+            }, 2000);
+        }
+
+        function stopPolling() {
+            if (state.pollingInterval) {
+                clearInterval(state.pollingInterval);
+                state.pollingInterval = null;
+            }
         }
 
         // Initialize
-        function initApp() {
-            // Set up event listeners
-            document.getElementById('admin-auth-form').addEventListener('submit', handleAdminLogin);
-            document.getElementById('settings-form').addEventListener('submit', handleSaveSettings);
-            document.getElementById('add-stream-form').addEventListener('submit', handleAddStream);
-            
-            // Form toggles
-            document.getElementById('toggle-live-btn').addEventListener('click', () => {
-                document.getElementById('add-stream-form').classList.remove('hidden');
-                document.getElementById('upload-video-form').classList.add('hidden');
-            });
-            
-            document.getElementById('toggle-upload-btn').addEventListener('click', () => {
-                document.getElementById('add-stream-form').classList.add('hidden');
-                document.getElementById('upload-video-form').classList.remove('hidden');
-            });
-
-            // Start with homepage
-            showHomepage();
-        }
-
-        window.onload = initApp;
+        window.addEventListener('load', () => {
+            document.getElementById('landing-page').classList.remove('hidden');
+            document.getElementById('live-feed').classList.add('hidden');
+        });
     </script>
 </body>
 </html>

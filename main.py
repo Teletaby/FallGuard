@@ -1,4 +1,3 @@
-# main.py
 import os
 import threading
 import time
@@ -12,101 +11,102 @@ import cv2
 from collections import deque
 
 # --- IMPORT MODULES ---
-# NOTE: These modules (skeleton_lstm, video_utils) are assumed to exist in 'app/' 
-# and contain the necessary definitions (LSTMModel, extract_55_features, etc.)
 import torch
 from app.skeleton_lstm import LSTMModel, SEQUENCE_LENGTH, FEATURE_SIZE, HIDDEN_SIZE, NUM_LAYERS, OUTPUT_SIZE
 from app.video_utils import extract_55_features, draw_skeleton, predict_torch 
 import mediapipe as mp
 
 # --- Global Settings ---
-DEFAULT_FALL_THRESHOLD = 0.95 
-INTERNAL_FPS = 30 # Assumption: Processor aims for 30 frames per second loop rate
-DEFAULT_FALL_DELAY_SECONDS = 3 
+DEFAULT_FALL_THRESHOLD = 0.70
+INTERNAL_FPS = 30
+DEFAULT_FALL_DELAY_SECONDS = 2
 GLOBAL_SETTINGS = {
     "fall_threshold": DEFAULT_FALL_THRESHOLD,
     "fall_delay_seconds": DEFAULT_FALL_DELAY_SECONDS
 }
 
 # --- Model Loading ---
-MODEL_FILE = 'lstm_fall_model.pth' 
+MODEL_FILE = 'models/skeleton_lstm_pytorch_model.pth'
 LSTM_MODEL = None
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Define device early
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"[INFO] Initializing PyTorch. Using device: {device}")
 
 try:
-    # 1. Initialize the model structure
-    LSTM_MODEL = LSTMModel(FEATURE_SIZE, HIDDEN_SIZE, OUTPUT_SIZE, NUM_LAYERS)
-    
-    if os.path.exists(MODEL_FILE):
-        # 2. Load the weights if the file exists
-        LSTM_MODEL.load_state_dict(torch.load(MODEL_FILE, map_location=device))
-        LSTM_MODEL.to(device) # Move model to device
-        LSTM_MODEL.eval()
-        print(f"[SUCCESS] Loaded PyTorch LSTM Model. Feat: {FEATURE_SIZE}, Seq: {SEQUENCE_LENGTH} on {device}")
-    else:
-        # Fallback if the model file is missing
-        print(f"[ ERROR] LSTM Model file not found at {MODEL_FILE}. Using mock logic.") 
-        LSTM_MODEL = None 
+    # Try loading with the correct output size first
+    try:
+        LSTM_MODEL = LSTMModel(FEATURE_SIZE, HIDDEN_SIZE, OUTPUT_SIZE, NUM_LAYERS)
+        
+        if os.path.exists(MODEL_FILE):
+            LSTM_MODEL.load_state_dict(torch.load(MODEL_FILE, map_location=device, weights_only=True))
+            LSTM_MODEL.to(device)
+            LSTM_MODEL.eval()
+            print(f"[SUCCESS] Loaded LSTM Model from {MODEL_FILE}")
+            print(f"           Features: {FEATURE_SIZE}, Hidden: {HIDDEN_SIZE}, Output: {OUTPUT_SIZE}")
+        else:
+            print(f"[WARNING] Model file not found: {MODEL_FILE}")
+            LSTM_MODEL = None
+    except RuntimeError as e:
+        # Model shape mismatch - try with output_size=1 (older model format)
+        if "size mismatch" in str(e):
+            print(f"[INFO] Model shape mismatch detected, trying legacy format (output_size=1)")
+            LSTM_MODEL = LSTMModel(FEATURE_SIZE, HIDDEN_SIZE, 1, NUM_LAYERS)
+            
+            if os.path.exists(MODEL_FILE):
+                LSTM_MODEL.load_state_dict(torch.load(MODEL_FILE, map_location=device, weights_only=True))
+                LSTM_MODEL.to(device)
+                LSTM_MODEL.eval()
+                print(f"[SUCCESS] Loaded LSTM Model (legacy format) from {MODEL_FILE}")
+            else:
+                LSTM_MODEL = None
+        else:
+            raise
 except Exception as e:
-    # Handle fatal loading errors
-    print(f"[FATAL] Failed to load PyTorch LSTM model: {e}") 
+    print(f"[ERROR] Failed to load LSTM model: {e}") 
+    print(f"[INFO] Falling back to enhanced heuristic detection")
     LSTM_MODEL = None
 
-# MediaPipe Setup Check
+# MediaPipe Setup
 USE_MEDIAPIPE = False
 try:
     mp_pose = mp.solutions.pose
     USE_MEDIAPIPE = True
-    print("MediaPipe available: using pose detection.")
-except Exception:
-    print("MediaPipe not available. Fall detection will not work without it.")
-    # Fallback setup 
-    hog = cv2.HOGDescriptor()
-    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    print("[SUCCESS] MediaPipe initialized successfully")
+except Exception as e:
+    print(f"[ERROR] MediaPipe not available: {e}")
 
 # Fall Timer Logic
 class FallTimer:
-    """Manages the continuous frame count required to confirm a fall alert."""
     def __init__(self, threshold_frames=5):
-        self.threshold = threshold_frames # Number of continuous frames/steps needed
+        self.threshold = threshold_frames
         self.counter = 0
+        self.last_fall_time = 0
+    
     def update(self, is_falling):
+        current_time = time.time()
         if is_falling:
             self.counter += 1
+            self.last_fall_time = current_time
         else:
-            self.counter = 0
+            if current_time - self.last_fall_time > 1.0:
+                self.counter = 0
         return self.counter >= self.threshold
 
-# --- GLOBAL CAMERA & STATUS MANAGEMENT ---
-CAMERA_DEFINITIONS = {} 
-CAMERA_STATUS = {} 
-shared_frames = {}
-camera_lock = threading.Lock() # Lock for modifying CAMERA_DEFINITIONS and CAMERA_STATUS
+# --- GLOBAL CAMERA MANAGEMENT (FIXED) ---
+CAMERA_DEFINITIONS = {}  # Persistent camera definitions
+CAMERA_STATUS = {}       # Live status of cameras
+shared_frames = {}       # Video frames for streaming
+camera_lock = threading.Lock()
 
-# -------------------------
 # Flask app 
-# -------------------------
-# *** CRITICAL CHANGE: Set static_folder to 'app' ***
 app = Flask(__name__, static_folder='app', static_url_path='')
-app.secret_key = os.environ.get("FALLGUARD_SECRET", "super_secret_key")
+app.secret_key = os.environ.get("FALLGUARD_SECRET", "fallguard_secret_key_2024")
 UPLOAD_FOLDER = 'uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
-# In-memory users (Simple Authentication)
-USERS = {}
-USERS["guest@fallguard.com"] = {
-    "id": "guest-id",
-    "email": "guest@fallguard.com",
-    "password": generate_password_hash("guest")
-}
-
-
-# -------------------------
-# Camera Processing Thread
-# -------------------------
+# --- Enhanced Camera Processor (FIXED) ---
 class CameraProcessor(threading.Thread):
     def __init__(self, camera_id, src, name, sequence_length=SEQUENCE_LENGTH, device=None):
         super().__init__(daemon=True)
@@ -117,277 +117,427 @@ class CameraProcessor(threading.Thread):
         self.is_running = False
         self.device = device if device is not None else torch.device('cpu')
         
-        # Initialize fall_timer placeholder
         self.fall_timer = FallTimer(threshold_frames=1) 
         
         self.mp_pose_instance = None
         if USE_MEDIAPIPE:
-            # Separate MediaPipe instance for each thread
             self.mp_pose_instance = mp_pose.Pose(
                 static_image_mode=False, 
-                model_complexity=0, 
-                enable_segmentation=False
+                model_complexity=0,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+                enable_segmentation=False,
+                smooth_landmarks=True
             ) 
         
         self.sequence_length = sequence_length
-        # Initialize deque with zero vectors matching FEATURE_SIZE (55)
         self.pose_sequence = deque([np.zeros(FEATURE_SIZE, dtype=np.float32) for _ in range(sequence_length)], 
                                      maxlen=sequence_length) 
         
         self.latest_pose_results = None
-        self.latest_fall_prob = 0.0 # Store latest fall probability
-        self.hog = None
-        if not USE_MEDIAPIPE:
-            self.hog = cv2.HOGDescriptor()
-            self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        self.latest_fall_prob = 0.0
+        self.latest_features = None
+        
+        self.frame_count = 0
+        self.last_fps_update = time.time()
+        self.current_fps = 0
+        self.processing_time = 0
+        
+        # FIXED: Initialize shared frame immediately
+        self._init_shared_frame()
 
-    # Dynamic update for the fall timer threshold
+    def _init_shared_frame(self):
+        """Initialize shared frame with placeholder."""
+        placeholder = 100 * np.ones((480, 640, 3), dtype=np.uint8)
+        cv2.putText(placeholder, "Initializing...", (180, 220), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
+        cv2.putText(placeholder, self.name, (200, 260), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1)
+        
+        shared_frames[self.camera_id] = {
+            "frame": placeholder,
+            "lock": threading.Lock()
+        }
+
     def update_fall_timer_threshold(self):
-        """Calculates the frame count needed based on global seconds delay."""
+        """Updates fall timer based on global settings."""
         delay_seconds = GLOBAL_SETTINGS['fall_delay_seconds']
-        # Convert seconds to frame count threshold, ensuring it's at least 1
         frame_threshold = max(1, round(delay_seconds * INTERNAL_FPS)) 
         self.fall_timer = FallTimer(threshold_frames=frame_threshold)
-        print(f"[{self.name}] Fall delay set to {delay_seconds}s (Threshold: {frame_threshold} frames).")
 
     def update_camera_status(self, status, color, last_alert=None, is_live=True):
         with camera_lock:
-            if self.camera_id in CAMERA_STATUS:
-                CAMERA_STATUS[self.camera_id].update({
-                    "status": status,
-                    "color": color,
-                    "isLive": is_live,
-                    "name": self.name,
-                    "source": self.src,
-                    "confidence_score": self.latest_fall_prob, # Add confidence score
-                    "model_threshold": GLOBAL_SETTINGS['fall_threshold'] # Add model threshold
-                })
-                if last_alert:
-                    CAMERA_STATUS[self.camera_id]["lastAlert"] = time.ctime(last_alert)
+            if self.camera_id not in CAMERA_STATUS:
+                CAMERA_STATUS[self.camera_id] = {}
+            
+            CAMERA_STATUS[self.camera_id].update({
+                "status": status,
+                "color": color,
+                "isLive": is_live,
+                "name": self.name,
+                "source": str(self.src),
+                "confidence_score": self.latest_fall_prob,
+                "model_threshold": GLOBAL_SETTINGS['fall_threshold'],
+                "fps": self.current_fps
+            })
+            if last_alert:
+                CAMERA_STATUS[self.camera_id]["lastAlert"] = time.ctime(last_alert)
 
     def extract_features_and_bbox(self, frame):
-        """Extracts 55 features using video_utils."""
+        """Extract pose features using MediaPipe."""
         if USE_MEDIAPIPE and self.mp_pose_instance:
-            # Use the integrated feature extraction from video_utils
-            bbox, feature_vec, pose_results = extract_55_features(frame, self.mp_pose_instance)
-            self.latest_pose_results = pose_results
+            try:
+                bbox, feature_vec, pose_results = extract_55_features(frame, self.mp_pose_instance)
+                self.latest_pose_results = pose_results
+                self.latest_features = feature_vec
+                
+                # Debug: Check if we're getting valid features
+                if feature_vec is not None and np.any(feature_vec != 0):
+                    # Valid features detected
+                    pass
+                else:
+                    # No person detected - use zero features
+                    feature_vec = np.zeros(FEATURE_SIZE, dtype=np.float32)
+                    bbox = None
+                    pose_results = None
+            except Exception as e:
+                print(f"[ERROR] Feature extraction failed: {e}")
+                feature_vec = np.zeros(FEATURE_SIZE, dtype=np.float32)
+                bbox = None
+                pose_results = None
         else:
-            # Fallback (No useful features, feature_vec is zeros)
             feature_vec = np.zeros(FEATURE_SIZE, dtype=np.float32)
             bbox = None
             pose_results = None
-
-            if self.hog:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                # Convert the frame to a format suitable for HOG detection
-                (rects, _) = self.hog.detectMultiScale(gray, winStride=(8,8), padding=(8,8), scale=1.05)
-                if len(rects) > 0:
-                    # Find the largest bounding box
-                    bbox = max(rects, key=lambda r: r[2]*r[3])
             
-        self.pose_sequence.append(feature_vec) # Append the new 55-dim feature vector
+        self.pose_sequence.append(feature_vec)
         return bbox, feature_vec, pose_results
 
-    def predict_fall_lstm(self):
+    def predict_fall_enhanced(self):
+        """Enhanced fall prediction."""
         current_threshold = GLOBAL_SETTINGS['fall_threshold']
         fall_probability = 0.0
 
-        if LSTM_MODEL is None or len(self.pose_sequence) < self.sequence_length:
-            # Mock logic when model is not loaded (or sequence not full)
-            if LSTM_MODEL is None:
-                # Use H (Normalized height of Hip Center) at index 5 for mock logic, if available
-                h_com = self.pose_sequence[-1][5] 
-                # Simple rule: if height is low and not zero (meaning person is detected)
-                fall_probability = 0.95 if h_com < 0.2 and h_com > 0.0 else 0.05
+        # Always try heuristic detection first as a baseline
+        if len(self.pose_sequence) > 0 and self.latest_features is not None:
+            features = self.latest_features
+            
+            # Extract key features
+            HWR = features[0]           # Height-Width Ratio
+            TorsoAngle = features[1]    # Torso angle
+            D = features[2]             # Head-Hip difference
+            H = features[5]             # Hip height (normalized)
+            FallAngleD = features[6]    # Fall angle
+            
+            # Enhanced heuristic scoring
+            fall_score = 0.0
+            
+            # Criterion 1: Low HWR (person wider than tall)
+            if 0.0 < HWR < 0.7:
+                fall_score += 0.3
+                if HWR < 0.5:
+                    fall_score += 0.2
+            
+            # Criterion 2: High torso angle (leaning/horizontal)
+            if TorsoAngle > 45:
+                fall_score += 0.25
+                if TorsoAngle > 70:
+                    fall_score += 0.15
+            
+            # Criterion 3: Low hip height
+            if H > 0.6:
+                fall_score += 0.2
+                if H > 0.75:
+                    fall_score += 0.2
+            
+            # Criterion 4: Low fall angle (body horizontal)
+            if FallAngleD < 30:
+                fall_score += 0.3
+            
+            # Criterion 5: Small head-hip difference
+            if abs(D) < 0.15:
+                fall_score += 0.15
+            
+            fall_probability = min(fall_score, 0.99)
+            
+            # Debug output every 30 frames
+            if hasattr(self, 'debug_counter'):
+                self.debug_counter += 1
             else:
-                # Sequence not full but model loaded - use default low probability
-                fall_probability = 0.01 
+                self.debug_counter = 0
                 
-            self.latest_fall_prob = fall_probability # Store probability
-            return (fall_probability >= current_threshold), fall_probability
+            if self.debug_counter % 30 == 0:
+                print(f"[{self.name}] Heuristic: HWR={HWR:.2f}, Torso={TorsoAngle:.0f}°, H={H:.2f}, Angle={FallAngleD:.0f}°, Score={fall_probability:.2f}")
 
-        # Convert deque to a numpy array, then to a PyTorch tensor
-        input_data = np.array(self.pose_sequence, dtype=np.float32)
-        # Add batch dimension (1, seq_len, feature_size)
-        input_tensor = torch.tensor(input_data, dtype=torch.float32).unsqueeze(0).to(self.device)
+        # Try LSTM model if available and sequence is ready
+        if LSTM_MODEL is not None and len(self.pose_sequence) >= self.sequence_length:
+            try:
+                input_data = np.array(self.pose_sequence, dtype=np.float32)
+                input_tensor = torch.tensor(input_data, dtype=torch.float32).unsqueeze(0).to(self.device)
 
-        try:
-            # Use the integrated prediction function from video_utils
-            pred, prob = predict_torch(LSTM_MODEL, input_tensor, threshold=current_threshold)
-            self.latest_fall_prob = prob # Store probability
-            return (pred == 1), prob
-        except Exception as e:
-            print(f"Prediction error for {self.camera_id}: {e}")
-            self.latest_fall_prob = 0.0 # Store probability
-            return False, 0.0
+                with torch.no_grad():
+                    pred, prob = predict_torch(LSTM_MODEL, input_tensor, threshold=current_threshold)
+                
+                # Use LSTM probability if it's higher than heuristic
+                if prob > fall_probability:
+                    fall_probability = prob
+                    if self.debug_counter % 30 == 0:
+                        print(f"[{self.name}] LSTM override: {prob:.2f}")
+            except Exception as e:
+                print(f"[ERROR] LSTM prediction failed for {self.camera_id}: {e}")
+                # Continue with heuristic probability
 
-    def draw_bbox_and_status(self, frame, bbox, fall_confirmed, fall_prob, current_threshold, feature_vector):
+        self.latest_fall_prob = fall_probability
+        return (fall_probability >= current_threshold), fall_probability
+
+    def draw_enhanced_overlay(self, frame, bbox, fall_confirmed, fall_prob, current_threshold, feature_vector):
+        """Enhanced visualization."""
         h, w, _ = frame.shape
         
-        cv2.putText(frame, f"Prob: {fall_prob:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(frame, f"Threshold: {current_threshold:.2f}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(frame, f"Delay: {GLOBAL_SETTINGS['fall_delay_seconds']}s", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        panel_height = 130
+        panel_color = (20, 20, 20) if not fall_confirmed else (0, 0, 80)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (5, 5), (350, panel_height), panel_color, -1)
+        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+        cv2.rectangle(frame, (5, 5), (350, panel_height), (255, 255, 255), 2)
+        
+        y_offset = 28
+        line_height = 25
+        
+        status_text = "⚠️ FALL DETECTED!" if fall_confirmed else "✓ Monitoring Active"
+        status_color = (0, 0, 255) if fall_confirmed else (0, 255, 0)
+        cv2.putText(frame, status_text, (15, y_offset), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.65, status_color, 2, cv2.LINE_AA)
+        
+        y_offset += line_height
+        cv2.putText(frame, f"Confidence: {fall_prob:.1%}", (15, y_offset), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        y_offset += line_height
+        cv2.putText(frame, f"Threshold: {current_threshold:.1%}", (15, y_offset), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        y_offset += line_height
+        cv2.putText(frame, f"Alert Delay: {GLOBAL_SETTINGS['fall_delay_seconds']}s", (15, y_offset), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        y_offset += line_height
+        cv2.putText(frame, f"FPS: {self.current_fps:.1f} | Model: {'LSTM' if LSTM_MODEL else 'Heuristic'}", 
+                   (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
 
-        if bbox is not None and bbox[2] > 0 and bbox[3] > 0: # Ensure bbox is valid
-            # Bbox from feature extraction is typically (x, y, w, h)
+        if bbox is not None and bbox[2] > 0 and bbox[3] > 0:
             x, y, bw, bh = bbox
             color = (0, 0, 255) if fall_confirmed else (0, 255, 0)
-            thickness = 4 if fall_confirmed else 3
+            thickness = 5 if fall_confirmed else 2
             
-            # Draw Bounding Box
             cv2.rectangle(frame, (int(x), int(y)), (int(x + bw), int(y + bh)), color, thickness)
             
-            label = "FALL DETECTED!" if fall_confirmed else "PERSON"
-            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-            # Ensure text is above the frame edge
-            text_x = int(x + (bw - text_size[0]) / 2)
-            text_y = max(15, int(y - 10))
-
-            cv2.putText(frame, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
-
-            # Display HWR (index 0) and Fall Angle D (index 6) for debugging
-            if feature_vector is not None and len(feature_vector) >= 7 and feature_vector[0] != 0:
-                hwr = feature_vector[0] 
-                fall_angle_D = feature_vector[6] 
-                cv2.putText(frame, f"HWR: {hwr:.2f} | Angle(D): {fall_angle_D:.2f}", 
-                            (int(x), int(y + bh + 25)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 1, cv2.LINE_AA)
+            label = "FALL" if fall_confirmed else "PERSON"
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)[0]
+            label_x = int(x + (bw - label_size[0]) / 2)
+            label_y = max(30, int(y - 15))
+            
+            cv2.rectangle(frame, (label_x - 8, label_y - label_size[1] - 8), 
+                         (label_x + label_size[0] + 8, label_y + 8), color, -1)
+            cv2.putText(frame, label, (label_x, label_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+        
         return frame
 
     def run(self):
-        self.update_fall_timer_threshold() # Set initial delay threshold before loop starts
+        """Main processing loop - FIXED."""
+        self.update_fall_timer_threshold()
         
-        with camera_lock:
-            CAMERA_STATUS[self.camera_id] = {
-                "name": self.name, 
-                "status": "Initializing", 
-                "isLive": True, 
-                "color": "gray", 
-                "location": f"Source {self.src}",
-                "source": self.src,
-                "confidence_score": 0.0, # Initialize
-                "model_threshold": GLOBAL_SETTINGS['fall_threshold'] # Initialize
-            }
+        # Update status to starting
+        self.update_camera_status("Starting...", "gray", is_live=True)
         
-        # Open video source (Webcam index or file path)
-        self.cap = cv2.VideoCapture(self.src)
-        # Check if the source is a string (URL or file) but not a digit (webcam index)
-        is_video_file = isinstance(self.src, str) and (not str(self.src).isdigit())
+        print(f"[{self.name}] Opening video source: {self.src}")
+        
+        # Try multiple times to open camera
+        max_retries = 3
+        for attempt in range(max_retries):
+            self.cap = cv2.VideoCapture(self.src)
+            
+            if self.cap and self.cap.isOpened():
+                # Successfully opened
+                ret, test_frame = self.cap.read()
+                if ret:
+                    print(f"[SUCCESS] Camera '{self.name}' opened on attempt {attempt + 1}")
+                    break
+                else:
+                    self.cap.release()
+                    self.cap = None
+            
+            if attempt < max_retries - 1:
+                print(f"[RETRY] Attempt {attempt + 1} failed, retrying...")
+                time.sleep(1)
 
         if not self.cap or not self.cap.isOpened():
-            print(f"ERROR: Cannot open video source {self.src}. Stopping thread for {self.camera_id}.")
-            self.update_camera_status("Offline", "gray", is_live=False)
+            print(f"[ERROR] Failed to open camera: {self.src}")
+            self.update_camera_status("Failed to Open", "gray", is_live=False)
             
-            # Clean up global state if camera failed to open
+            # Create error frame
+            error_frame = 100 * np.ones((480, 640, 3), dtype=np.uint8)
+            cv2.putText(error_frame, "Camera Error", (180, 220), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
+            cv2.putText(error_frame, self.name, (200, 260), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1)
+            
+            with shared_frames[self.camera_id]["lock"]:
+                shared_frames[self.camera_id]["frame"] = error_frame
+            
             with camera_lock:
-                if self.camera_id in CAMERA_STATUS: del CAMERA_STATUS[self.camera_id]
-                if self.camera_id in CAMERA_DEFINITIONS: 
+                if self.camera_id in CAMERA_DEFINITIONS:
                     CAMERA_DEFINITIONS[self.camera_id]['isLive'] = False
                     CAMERA_DEFINITIONS[self.camera_id]['thread_instance'] = None
             return
 
-        shared_frames[self.camera_id] = {"frame": None, "lock": threading.Lock()}
+        # Determine if video file
+        is_video_file = isinstance(self.src, str) and not str(self.src).isdigit() and os.path.exists(self.src)
+
+        # Set camera properties
+        if not is_video_file:
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+        else:
+            video_fps = self.cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            print(f"[{self.name}] Video file: FPS={video_fps}, Frames={total_frames}")
+
+        # Get first frame
+        ret, first_frame = self.cap.read()
+        if ret:
+            first_frame = cv2.resize(first_frame, (640, 480))
+            with shared_frames[self.camera_id]["lock"]:
+                shared_frames[self.camera_id]["frame"] = first_frame
+            
+            # Reset position for video files
+            if is_video_file:
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         
         self.is_running = True
-        self.update_camera_status("Running", "green", is_live=True)
+        self.update_camera_status("Active", "green", is_live=True)
+        
+        print(f"[SUCCESS] Camera '{self.name}' started successfully")
 
+        # Main loop
+        consecutive_failures = 0
+        max_failures = 30  # Allow 30 consecutive failures before giving up
+        
         try:
             while self.is_running:
+                start_time = time.time()
+                
                 ret, frame = self.cap.read()
                 
+                # Handle video looping
                 if is_video_file and not ret:
-                    # Loop video file if end is reached
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0) 
                     ret, frame = self.cap.read()
 
                 if not ret:
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_failures:
+                        print(f"[ERROR] {self.name}: Too many consecutive failures")
+                        break
                     time.sleep(0.05)
                     continue
                 
-                bbox = None
-                feature_vec = None
+                consecutive_failures = 0  # Reset on success
+                
+                # Process frame
+                frame = cv2.resize(frame, (640, 480))
                 
                 try:
-                    # Resize frame for faster processing (optional, but good practice)
-                    frame = cv2.resize(frame, (640, 480))
-                    
                     bbox, feature_vec, pose_results = self.extract_features_and_bbox(frame)
                 except Exception as e:
-                    print(f"Feature extraction error for {self.camera_id}: {e}")
-                    pose_results = None
+                    bbox, feature_vec, pose_results = None, None, None
 
-                is_falling, fall_prob = self.predict_fall_lstm()
-                # Update fall confirmation status using the FallTimer
+                is_falling, fall_prob = self.predict_fall_enhanced()
                 fall_confirmed = self.fall_timer.update(is_falling) 
                 current_threshold = GLOBAL_SETTINGS['fall_threshold']
 
-                # Update global status for the dashboard
                 if fall_confirmed:
-                    self.update_camera_status(f"FALL DETECTED ({fall_prob:.2f})", "red", last_alert=time.time())
+                    self.update_camera_status("FALL DETECTED", "red", last_alert=time.time())
                 elif is_falling:
-                    self.update_camera_status(f"Possible Fall ({fall_prob:.2f})", "yellow")
+                    self.update_camera_status("Analyzing", "yellow")
                 else:
-                    self.update_camera_status(f"Normal ({fall_prob:.2f})", "green")
+                    self.update_camera_status("Normal", "green")
 
+                # Draw visualizations
                 processed = frame.copy()
                 
-                # Draw skeleton if MediaPipe results are available
                 if self.latest_pose_results:
                     processed = draw_skeleton(processed, self.latest_pose_results, fall_confirmed)
 
-                # Draw BBox and status text
-                processed = self.draw_bbox_and_status(processed, bbox, fall_confirmed, fall_prob, current_threshold, feature_vec)
+                processed = self.draw_enhanced_overlay(processed, bbox, fall_confirmed, 
+                                                      fall_prob, current_threshold, feature_vec)
 
-                # Store the processed frame for MJPEG streaming
+                # Store frame
                 with shared_frames[self.camera_id]["lock"]:
                     shared_frames[self.camera_id]["frame"] = processed
 
-                # Control frame rate
+                # FPS calculation
+                self.frame_count += 1
+                if time.time() - self.last_fps_update >= 1.0:
+                    self.current_fps = self.frame_count / (time.time() - self.last_fps_update)
+                    self.frame_count = 0
+                    self.last_fps_update = time.time()
+
+                # Frame rate control
+                processing_time = time.time() - start_time
                 if is_video_file:
-                    # Read FPS from file, default to INTERNAL_FPS
                     fps = self.cap.get(cv2.CAP_PROP_FPS) or INTERNAL_FPS 
-                    if fps > 0:
-                        delay = 1 / fps
-                        time.sleep(delay)
-                    else:
-                        time.sleep(1/INTERNAL_FPS) # Fallback 
+                    target_delay = 1.0 / fps
+                    sleep_time = max(0, target_delay - processing_time)
+                    time.sleep(sleep_time)
                 else:
-                    time.sleep(1/INTERNAL_FPS) # Maintain internal processing rate (30 FPS)
+                    target_delay = 1.0 / INTERNAL_FPS
+                    sleep_time = max(0, target_delay - processing_time)
+                    time.sleep(sleep_time)
 
+        except Exception as e:
+            print(f"[ERROR] Camera processor crashed: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
-            # Resource cleanup
-            if self.mp_pose_instance: self.mp_pose_instance.close()
-            if self.cap: self.cap.release()
+            # Cleanup
+            if self.mp_pose_instance: 
+                self.mp_pose_instance.close()
+            if self.cap: 
+                self.cap.release()
             
-            # Clean up global state when thread stops
             with camera_lock:
-                if self.camera_id in CAMERA_STATUS: del CAMERA_STATUS[self.camera_id]
-                if self.camera_id in shared_frames: del shared_frames[self.camera_id]
-
+                if self.camera_id in CAMERA_STATUS: 
+                    del CAMERA_STATUS[self.camera_id]
                 if self.camera_id in CAMERA_DEFINITIONS: 
                     CAMERA_DEFINITIONS[self.camera_id]['isLive'] = False
                     CAMERA_DEFINITIONS[self.camera_id]['thread_instance'] = None
                 
-            print(f"Camera processor {self.camera_id} stopped.")
+            print(f"[INFO] Camera '{self.name}' stopped")
 
-# -------------------------
-# MJPEG stream generator
-# -------------------------
+# MJPEG Stream Generator (FIXED)
 def generate_mjpeg(camera_id):
-    """Generator that yields multipart MJPEG frames for a specific camera_id."""
-    # The boundary string used in the response header
+    """Generates MJPEG stream for a camera."""
     boundary = b'--frame\r\n'
     
-    # Check if the camera is defined to be running
+    # Wait briefly for camera to initialize
+    wait_time = 0
+    max_wait = 5  # Wait up to 5 seconds
+    
+    while camera_id not in shared_frames and wait_time < max_wait:
+        time.sleep(0.1)
+        wait_time += 0.1
+    
     if camera_id not in shared_frames:
-        # Create a temporary black/grey image for when a stream is not found
-        placeholder = 255 * np.ones((480, 640, 3), dtype=np.uint8) # Increased size slightly
-        cv2.putText(placeholder, f"STREAM NOT FOUND: {camera_id}", (30,240), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,0), 2)
+        placeholder = 100 * np.ones((480, 640, 3), dtype=np.uint8)
+        cv2.putText(placeholder, "Camera Not Available", (150, 220), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        cv2.putText(placeholder, f"ID: {camera_id}", (200, 260), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1)
         
-        # Encode the placeholder image
         ret, jpeg = cv2.imencode('.jpg', placeholder)
         frame_bytes = jpeg.tobytes()
-        
-        # FIX: Explicitly concatenate bytes on a single line to resolve SyntaxError
         yield boundary + b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
         return
         
@@ -397,267 +547,148 @@ def generate_mjpeg(camera_id):
             frame = frame_data["frame"].copy() if frame_data["frame"] is not None else None
         
         if frame is None:
-            # Placeholder for waiting or offline cameras
-            placeholder = 255 * np.ones((480, 640, 3), dtype=np.uint8)
-            cv2.putText(placeholder, f"Waiting for {camera_id}", (30,240), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,0), 2)
+            placeholder = 100 * np.ones((480, 640, 3), dtype=np.uint8)
+            cv2.putText(placeholder, "Initializing...", (180, 240), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
             ret, jpeg = cv2.imencode('.jpg', placeholder)
             frame_bytes = jpeg.tobytes()
         else:
-            # Use lower quality JPEG encoding for faster streaming
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
             ret, jpeg = cv2.imencode('.jpg', frame, encode_param)
             frame_bytes = jpeg.tobytes()
 
-        # FIX: Explicitly concatenate bytes on a single line to resolve SyntaxError
         yield boundary + b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
-        time.sleep(0.03) # Limit to roughly 33 FPS for streaming
-        
-    print(f"MJPEG generator stopped for {camera_id}.")
+        time.sleep(0.033)
 
-
-# -------------------------
 # Flask Routes
-# -------------------------
 @app.route('/')
 def index():
-    # *** CRITICAL CHANGE: Look for index.html in the 'app' directory ***
     return send_from_directory('app', 'index.html')
 
 @app.route('/video_feed/<camera_id>')
 def video_feed(camera_id):
-    if camera_id not in CAMERA_STATUS and camera_id not in CAMERA_DEFINITIONS:
-        # Return 404 if the camera doesn't exist at all
-        return "Camera stream is not defined.", 404
-        
-    # generate_mjpeg will handle the case where it exists but isn't running
-    return Response(generate_mjpeg(camera_id), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(generate_mjpeg(camera_id), 
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# --- AUTH ROUTES ---
-@app.route('/api/auth/signup', methods=['POST'])
-def api_signup():
-    data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
-
-    if not email or not password:
-        return jsonify({"success": False, "message": "Email and password are required"}), 400
-    
-    if email in USERS:
-        return jsonify({"success": False, "message": "User already exists"}), 409
-    
-    user_id = str(uuid.uuid4())
-    USERS[email] = {
-        "id": user_id,
-        "email": email,
-        "password": generate_password_hash(password)
-    }
-    session['user_id'] = user_id
-    session['email'] = email
-    return jsonify({"success": True, "message": "User created and signed in.", "email": email, "userId": user_id})
-
-@app.route('/api/auth/signin', methods=['POST'])
-def api_signin():
-    data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
-
-    if not email or not password:
-        return jsonify({"success": False, "message": "Email and password are required"}), 400
-
-    user_data = USERS.get(email)
-    if user_data and check_password_hash(user_data['password'], password):
-        session['user_id'] = user_data['id']
-        session['email'] = email
-        return jsonify({"success": True, "message": "Signed in successfully.", "email": email, "userId": user_data['id']})
-    
-    return jsonify({"success": False, "message": "Invalid email or password"}), 401
-
-@app.route('/api/auth/signout', methods=['POST'])
-def api_signout():
-    session.pop('user_id', None)
-    session.pop('email', None)
-    return jsonify({"success": True, "message": "Signed out successfully."})
-
-@app.route('/api/status', methods=['GET'])
-def api_status():
-    if 'user_id' in session:
-        return jsonify({
-            "isLoggedIn": True, 
-            "email": session.get('email'),
-            "userId": session.get('user_id')
-        })
-    return jsonify({"isLoggedIn": False, "email": None, "userId": None})
-
-
-# --- GLOBAL SETTINGS API (UPDATED) ---
 @app.route('/api/settings', methods=['GET', 'POST'])
 def api_settings():
-    if 'user_id' not in session: return jsonify({"success": False, "message": "Unauthorized"}), 401
-    
     if request.method == 'POST':
         data = request.get_json() or {}
         message = []
         
-        # 1. Update Fall Probability Threshold
         new_threshold = data.get('fall_threshold')
         if new_threshold is not None:
             try:
                 new_threshold = float(new_threshold)
                 if 0.0 <= new_threshold <= 1.0:
                     GLOBAL_SETTINGS['fall_threshold'] = new_threshold
-                    message.append("Threshold updated.")
+                    message.append("Threshold updated")
                 else:
-                    return jsonify({"success": False, "message": "Threshold must be between 0.0 and 1.0"}), 400
+                    return jsonify({"success": False, "message": "Threshold must be 0.0-1.0"}), 400
             except ValueError:
-                return jsonify({"success": False, "message": "Invalid fall_threshold value."}), 400
+                return jsonify({"success": False, "message": "Invalid threshold value"}), 400
                 
-        # 2. Update Fall Delay Seconds
-        new_delay_seconds = data.get('fall_delay_seconds')
-        if new_delay_seconds is not None:
+        new_delay = data.get('fall_delay_seconds')
+        if new_delay is not None:
             try:
-                # Expecting an integer number of seconds (e.g., 1 to 10)
-                new_delay_seconds = int(new_delay_seconds)
-                if 1 <= new_delay_seconds <= 10: 
-                    GLOBAL_SETTINGS['fall_delay_seconds'] = new_delay_seconds
-                    message.append("Delay updated.")
+                new_delay = int(new_delay)
+                if 1 <= new_delay <= 10: 
+                    GLOBAL_SETTINGS['fall_delay_seconds'] = new_delay
+                    message.append("Delay updated")
                     
-                    # Apply new delay to all running camera processors
                     with camera_lock:
                         for cam_def in CAMERA_DEFINITIONS.values():
                             processor = cam_def.get('thread_instance')
                             if processor and processor.is_running:
-                                # This ensures the FallTimer inside the thread is re-initialized
-                                processor.update_fall_timer_threshold() 
+                                processor.update_fall_timer_threshold()
                 else:
-                    return jsonify({"success": False, "message": "Delay must be between 1 and 10 seconds"}), 400
+                    return jsonify({"success": False, "message": "Delay must be 1-10 seconds"}), 400
             except ValueError:
-                return jsonify({"success": False, "message": "Invalid fall_delay_seconds value."}), 400
+                return jsonify({"success": False, "message": "Invalid delay value"}), 400
 
-        return jsonify({"success": True, "message": " ".join(message) or "Settings checked, no changes applied.", "settings": GLOBAL_SETTINGS})
+        return jsonify({"success": True, "message": " ".join(message), "settings": GLOBAL_SETTINGS})
         
     return jsonify({"success": True, "settings": GLOBAL_SETTINGS})
 
-
-# --- CAMERA MANAGEMENT API ---
 @app.route('/api/cameras', methods=['GET'])
 def api_get_cameras():
-    if 'user_id' not in session: return jsonify({"success": False, "message": "Unauthorized"}), 401
-    
-    # Merge definitions (permanent config) and status (live update)
     cameras = []
     with camera_lock:
         for cam_id, cam_def in CAMERA_DEFINITIONS.items():
+            processor = cam_def.get('thread_instance')
+            
+            is_actually_live = False
+            if processor is not None:
+                try:
+                    is_actually_live = processor.is_running and processor.is_alive()
+                except:
+                    is_actually_live = False
+            
             status = CAMERA_STATUS.get(cam_id, {
                 "status": "Offline", 
                 "color": "gray", 
                 "isLive": False, 
-                "lastAlert": "N/A",
                 "confidence_score": 0.0,
-                "model_threshold": GLOBAL_SETTINGS['fall_threshold']
+                "fps": 0
             })
-            # Check the actual thread status for reliability
-            is_live_from_thread = cam_def.get('thread_instance') is not None and cam_def['thread_instance'].is_running
+            
+            actual_is_live = is_actually_live and cam_id in shared_frames
             
             cameras.append({
                 "id": cam_id,
                 "name": cam_def['name'],
-                "source": str(cam_def['source']), # Ensure source is string for JSON serialization
-                "isLive": is_live_from_thread, # Use thread state for reliability
-                "status": status['status'],
-                "color": status['color'],
+                "source": str(cam_def['source']),
+                "isLive": actual_is_live,
+                "status": status['status'] if actual_is_live else "Offline",
+                "color": status['color'] if actual_is_live else "gray",
                 "lastAlert": status.get('lastAlert', 'N/A'),
-                "confidence_score": status.get('confidence_score', 0.0), 
-                "model_threshold": status.get('model_threshold', GLOBAL_SETTINGS['fall_threshold']) 
+                "confidence_score": status.get('confidence_score', 0.0),
+                "model_threshold": GLOBAL_SETTINGS['fall_threshold'],
+                "fps": status.get('fps', 0)
             })
+    
     return jsonify({"success": True, "cameras": cameras})
 
-
-# NEW ENDPOINT: Get all camera definitions (live and stopped)
 @app.route('/api/cameras/all_definitions', methods=['GET'])
 def api_get_all_definitions():
-    if 'user_id' not in session: 
-        return jsonify({"success": False, "message": "Unauthorized"}), 401
-    
     definitions = []
     with camera_lock:
         for cam_id, cam_def in CAMERA_DEFINITIONS.items():
-            is_live_from_thread = cam_def.get('thread_instance') is not None and cam_def['thread_instance'].is_running
+            processor = cam_def.get('thread_instance')
+            is_live = False
+            if processor is not None:
+                try:
+                    is_live = processor.is_running and processor.is_alive()
+                except:
+                    is_live = False
+            
             definitions.append({
                 "id": cam_id,
                 "name": cam_def['name'],
-                # Source is intentionally kept as string representation here for display
-                "source": str(cam_def['source']), 
-                "isLive": is_live_from_thread
+                "source": str(cam_def['source']),
+                "isLive": is_live
             })
     return jsonify({"success": True, "definitions": definitions})
 
-
-# NEW ENDPOINT: Restart an existing stopped camera
-@app.route('/api/cameras/add_existing', methods=['POST'])
-def api_add_existing_camera():
-    if 'user_id' not in session: 
-        return jsonify({"success": False, "message": "Unauthorized"}), 401
-    
-    data = request.get_json()
-    camera_id = data.get('camera_id')
-    
-    if not camera_id:
-        return jsonify({"success": False, "message": "Camera ID is required"}), 400
-
-    with camera_lock:
-        if camera_id not in CAMERA_DEFINITIONS:
-            return jsonify({"success": False, "message": "Camera ID not found"}), 404
-        
-        cam_def = CAMERA_DEFINITIONS[camera_id]
-        
-        # Check if already live
-        if cam_def.get('thread_instance') and cam_def['thread_instance'].is_running:
-            return jsonify({"success": False, "message": "Camera is already live"}), 400
-        
-        # Restart the camera processor
-        # Ensure 'source' is in the correct type (int or str)
-        src_type = cam_def['source']
-        try:
-            # Check if source is a digit string and convert back to int
-            if isinstance(src_type, str) and src_type.isdigit():
-                 src_type = int(src_type)
-        except:
-             pass # Keep as string if conversion fails or it was already an int
-
-        processor = CameraProcessor(camera_id=camera_id, src=src_type, name=cam_def['name'], device=device)
-        processor.start()
-        
-        CAMERA_DEFINITIONS[camera_id]['isLive'] = True
-        CAMERA_DEFINITIONS[camera_id]['thread_instance'] = processor
-        
-    return jsonify({"success": True, "message": f"Camera '{cam_def['name']}' restarted."})
-
-
 @app.route('/api/cameras/add', methods=['POST'])
 def api_add_camera():
-    if 'user_id' not in session: return jsonify({"success": False, "message": "Unauthorized"}), 401
-    
     data = request.get_json()
     name = data.get('name')
     source_str = data.get('source')
     
-    if not name or not source_str:
-        return jsonify({"success": False, "message": "Name and source are required"}), 400
+    if not name or source_str is None:
+        return jsonify({"success": False, "message": "Name and source required"}), 400
 
     try:
-        # Try to convert source to integer for webcam index, otherwise keep as string (URL/path)
         source = int(source_str)
     except ValueError:
         source = source_str
     
-    # Create unique ID for the camera
-    camera_id = f"cam_{str(uuid.uuid4()).split('-')[0]}"
+    camera_id = f"cam_{str(uuid.uuid4())[:8]}"
     
-    # Start the processing thread
     processor = CameraProcessor(camera_id=camera_id, src=source, name=name, device=device)
     processor.start()
     
-    # Store camera definition
     with camera_lock:
         CAMERA_DEFINITIONS[camera_id] = {
             "name": name, 
@@ -666,70 +697,158 @@ def api_add_camera():
             "thread_instance": processor
         }
 
-    return jsonify({"success": True, "message": f"Camera '{name}' added.", "camera_id": camera_id})
+    return jsonify({"success": True, "message": f"Camera '{name}' added", "camera_id": camera_id})
 
-# NEW ROUTE: Stop a running camera stream
 @app.route('/api/cameras/stop/<camera_id>', methods=['POST'])
 def api_stop_camera(camera_id):
-    if 'user_id' not in session: return jsonify({"success": False, "message": "Unauthorized"}), 401
-
-    if camera_id not in CAMERA_DEFINITIONS:
-        return jsonify({"success": False, "message": "Camera ID not found"}), 404
-
-    cam_def = CAMERA_DEFINITIONS[camera_id]
-    processor = cam_def.get('thread_instance')
-
-    if processor and processor.is_running:
-        processor.is_running = False # Signal the thread to stop gracefully
-        # Use threading.Thread's join for a clean stop
-        processor.join(timeout=5) 
-
     with camera_lock:
-        # Mark as offline regardless of successful thread join
+        if camera_id not in CAMERA_DEFINITIONS:
+            return jsonify({"success": False, "message": "Camera not found"}), 404
+
+        cam_def = CAMERA_DEFINITIONS[camera_id]
+        processor = cam_def.get('thread_instance')
+
+        if processor and processor.is_running:
+            processor.is_running = False
+            processor.join(timeout=3)
+
         CAMERA_DEFINITIONS[camera_id]['isLive'] = False
         CAMERA_DEFINITIONS[camera_id]['thread_instance'] = None
         
-        # Clean up status and shared frames immediately
+        if camera_id in CAMERA_STATUS:
+            del CAMERA_STATUS[camera_id]
+
+    return jsonify({"success": True, "message": "Camera stopped"})
+
+@app.route('/api/cameras/remove/<camera_id>', methods=['DELETE'])
+def api_remove_camera(camera_id):
+    with camera_lock:
+        if camera_id not in CAMERA_DEFINITIONS:
+            return jsonify({"success": False, "message": "Camera not found"}), 404
+
+        cam_def = CAMERA_DEFINITIONS[camera_id]
+        processor = cam_def.get('thread_instance')
+        if processor and processor.is_running:
+            processor.is_running = False
+            processor.join(timeout=3)
+
+        # Delete video file if it exists
+        source = cam_def['source']
+        if isinstance(source, str) and source.startswith(UPLOAD_FOLDER):
+            try:
+                if os.path.exists(source):
+                    os.remove(source)
+                    print(f"[INFO] Deleted video file: {source}")
+            except Exception as e:
+                print(f"[WARNING] Could not delete file {source}: {e}")
+
+        del CAMERA_DEFINITIONS[camera_id]
         if camera_id in CAMERA_STATUS:
             del CAMERA_STATUS[camera_id]
         if camera_id in shared_frames:
             del shared_frames[camera_id]
 
-    return jsonify({"success": True, "message": f"Camera '{cam_def['name']}' stopped and resources released."})
+    return jsonify({"success": True, "message": "Camera removed"})
 
+@app.route('/api/cameras/add_existing', methods=['POST'])
+def api_add_existing_camera():
+    data = request.get_json()
+    camera_id = data.get('camera_id')
+    
+    if not camera_id:
+        return jsonify({"success": False, "message": "Camera ID required"}), 400
 
-# FIXED: Completed the logic for video file uploads
+    with camera_lock:
+        if camera_id not in CAMERA_DEFINITIONS:
+            return jsonify({"success": False, "message": "Camera not found"}), 404
+        
+        cam_def = CAMERA_DEFINITIONS[camera_id]
+        
+        if cam_def.get('thread_instance') and cam_def['thread_instance'].is_running:
+            return jsonify({"success": False, "message": "Camera already running"}), 400
+        
+        src_type = cam_def['source']
+        try:
+            if isinstance(src_type, str) and src_type.isdigit():
+                src_type = int(src_type)
+        except:
+            pass
+
+        processor = CameraProcessor(camera_id=camera_id, src=src_type, name=cam_def['name'], device=device)
+        processor.start()
+        
+        CAMERA_DEFINITIONS[camera_id]['isLive'] = True
+        CAMERA_DEFINITIONS[camera_id]['thread_instance'] = processor
+        
+    return jsonify({"success": True, "message": "Camera restarted"})
+
 @app.route('/api/cameras/upload', methods=['POST'])
 def api_upload_camera():
-    if 'user_id' not in session: return jsonify({"success": False, "message": "Unauthorized"}), 401
-    
     if 'video_file' not in request.files:
-        return jsonify({"success": False, "message": "No file part"}), 400
+        return jsonify({"success": False, "message": "No file uploaded"}), 400
     
     file = request.files['video_file']
     name = request.form.get('name')
 
     if file.filename == '':
-        return jsonify({"success": False, "message": "No selected file"}), 400
+        return jsonify({"success": False, "message": "No file selected"}), 400
     if not name:
-        return jsonify({"success": False, "message": "Camera name is required"}), 400 
+        return jsonify({"success": False, "message": "Camera name required"}), 400
     
-    # 1. Save the file securely
+    # Validate file type
+    allowed_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    
+    if file_ext not in allowed_extensions:
+        return jsonify({"success": False, "message": f"Unsupported file type: {file_ext}"}), 400
+    
     filename = secure_filename(file.filename)
-    # Append a UUID to prevent collisions if users upload files with the same name
     unique_filename = f"{uuid.uuid4().hex}_{filename}"
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-    file.save(filepath)
+    
+    try:
+        print(f"[UPLOAD] Saving file: {filename} -> {filepath}")
+        file.save(filepath)
+        print(f"[UPLOAD] File saved successfully: {filepath}")
+        
+        # Verify file exists and is readable
+        if not os.path.exists(filepath):
+            return jsonify({"success": False, "message": "File save failed"}), 500
+            
+        file_size = os.path.getsize(filepath)
+        print(f"[UPLOAD] File size: {file_size / (1024*1024):.2f} MB")
+        
+        # Quick validation that OpenCV can read it
+        test_cap = cv2.VideoCapture(filepath)
+        if not test_cap.isOpened():
+            test_cap.release()
+            os.remove(filepath)
+            return jsonify({"success": False, "message": "Invalid video file - cannot be read"}), 400
+        
+        ret, _ = test_cap.read()
+        test_cap.release()
+        
+        if not ret:
+            os.remove(filepath)
+            return jsonify({"success": False, "message": "Video file is empty or corrupted"}), 400
+        
+    except Exception as e:
+        print(f"[ERROR] Upload failed: {e}")
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except:
+                pass
+        return jsonify({"success": False, "message": f"Upload failed: {str(e)}"}), 500
 
-    # 2. Create unique ID and use filepath as source
-    camera_id = f"cam_{str(uuid.uuid4()).split('-')[0]}"
-    name_safe = secure_filename(name) # Safely use the provided name
+    camera_id = f"cam_{str(uuid.uuid4())[:8]}"
+    name_safe = name
 
-    # 3. Start the processing thread
+    print(f"[UPLOAD] Starting camera processor for: {name_safe} (ID: {camera_id})")
+    
     processor = CameraProcessor(camera_id=camera_id, src=filepath, name=name_safe, device=device)
     processor.start()
     
-    # 4. Store camera definition
     with camera_lock:
         CAMERA_DEFINITIONS[camera_id] = {
             "name": name_safe, 
@@ -738,19 +857,57 @@ def api_upload_camera():
             "thread_instance": processor
         }
     
-    return jsonify({"success": True, "message": f"Video stream '{name_safe}' added.", "camera_id": camera_id})
-
-
-# --- CRITICAL: STARTUP LOGIC ---
-if __name__ == '__main__':
-    # 1. Define a default camera to start immediately
-    DEFAULT_CAMERA_ID = "main_webcam_0"
-    DEFAULT_CAMERA_NAME = "Main Webcam Stream (Default)"
-    DEFAULT_CAMERA_SOURCE = 0 # Use 0 for the default integrated webcam
-
-    print(f"[{DEFAULT_CAMERA_NAME}] Attempting to start default camera...")
+    print(f"[UPLOAD] Camera started: {name_safe}")
     
-    # 2. Initialize and start the thread
+    return jsonify({
+        "success": True, 
+        "message": f"Video uploaded: {name_safe}", 
+        "camera_id": camera_id,
+        "file_size_mb": f"{file_size / (1024*1024):.2f}"
+    })
+
+@app.route('/api/debug/cameras', methods=['GET'])
+def api_debug_cameras():
+    """Debug endpoint to see camera states."""
+    debug_info = {
+        "definitions": {},
+        "status": {},
+        "shared_frames": list(shared_frames.keys()),
+        "settings": GLOBAL_SETTINGS
+    }
+    
+    with camera_lock:
+        for cam_id, cam_def in CAMERA_DEFINITIONS.items():
+            processor = cam_def.get('thread_instance')
+            debug_info["definitions"][cam_id] = {
+                "name": cam_def['name'],
+                "source": str(cam_def['source']),
+                "has_processor": processor is not None,
+                "is_running": processor.is_running if processor else False,
+                "is_alive": processor.is_alive() if processor else False,
+                "in_shared_frames": cam_id in shared_frames
+            }
+        
+        for cam_id, status in CAMERA_STATUS.items():
+            debug_info["status"][cam_id] = status
+    
+    return jsonify(debug_info)
+
+# Startup
+if __name__ == '__main__':
+    print("\n" + "="*60)
+    print("   FALLGUARD - AI Fall Detection System")
+    print("="*60)
+    
+    DEFAULT_CAMERA_ID = "main_webcam_0"
+    DEFAULT_CAMERA_NAME = "Main Webcam"
+    DEFAULT_CAMERA_SOURCE = 0
+
+    print(f"\n[STARTUP] Initializing default camera: {DEFAULT_CAMERA_NAME}")
+    print(f"[INFO] Source: {DEFAULT_CAMERA_SOURCE}")
+    print(f"[INFO] Model: {'LSTM' if LSTM_MODEL else 'Heuristic-based'}")
+    print(f"[INFO] MediaPipe: {'Enabled' if USE_MEDIAPIPE else 'Disabled'}")
+    
     default_processor = CameraProcessor(
         camera_id=DEFAULT_CAMERA_ID, 
         src=DEFAULT_CAMERA_SOURCE, 
@@ -759,7 +916,6 @@ if __name__ == '__main__':
     )
     default_processor.start()
 
-    # 3. Store the definition
     with camera_lock:
         CAMERA_DEFINITIONS[DEFAULT_CAMERA_ID] = {
             "name": DEFAULT_CAMERA_NAME,
@@ -768,6 +924,9 @@ if __name__ == '__main__':
             "thread_instance": default_processor
         }
 
-    # 4. Start the Flask application
-    print("Starting Flask application...")
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    print(f"\n[INFO] Server starting on http://0.0.0.0:5000")
+    print(f"[INFO] Access the system at: http://localhost:5000")
+    print(f"[INFO] Debug endpoint: http://localhost:5000/api/debug/cameras")
+    print("="*60 + "\n")
+    
+    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
