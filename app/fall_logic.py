@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from collections import deque
-from flask import Flask, request, jsonify, send_from_directory, Response
+from flask import Flask, request, jsonify, Response, render_template
 import os
 import threading
 from datetime import datetime
@@ -262,7 +262,12 @@ class CameraManager:
 # FLASK APPLICATION
 # ----------------------------------------------------
 
-app = Flask(__name__, static_folder='.', static_url_path='')
+# Get the directory where this script is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Go up one level to reach the templates folder
+TEMPLATE_DIR = os.path.join(os.path.dirname(BASE_DIR), 'templates')
+
+app = Flask(__name__, template_folder=TEMPLATE_DIR)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
 
 # Initialize components
@@ -276,7 +281,8 @@ camera_timers = {}
 
 @app.route('/')
 def index():
-    return send_from_directory('.', 'index.html')
+    """Serve the main HTML page"""
+    return render_template('index.html')
 
 @app.route('/api/settings', methods=['GET', 'POST'])
 def settings():
